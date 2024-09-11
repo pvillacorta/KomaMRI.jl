@@ -53,92 +53,27 @@ function resample(itp::Interpolator2D{T}, t::AbstractArray{T}) where {T<:Real}
     Ns = size(itp.coefs, 1)
     id = similar(itp.coefs, Ns)
     copyto!(id, collect(range(oneunit(T), T(Ns), Ns)))
-    u = itp.(id, t)
-    m = minimum([8, size(u, 2)])
-    println("t: ", @view(t[1, 1:m]))
-    println("u: ", @view(u[1, 1:m]), '\n')
-    return u
+    return itp.(id, t)
 end
 
-function displacement_x!(
-    ux::AbstractArray{T},
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_x!(ux, action::ArbitraryAction, x, y, z, t)
     itp = interpolate(action.dx, Gridded(Linear()), Val(size(action.dx,1)))
     ux .= resample(itp, t)
     return nothing
 end
 
-function displacement_y!(
-    uy::AbstractArray{T},
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_y!(uy, action::ArbitraryAction, x, y, z, t)
     itp = interpolate(action.dy, Gridded(Linear()), Val(size(action.dy,1)))
     uy .= resample(itp, t)
     return nothing
 end
 
-function displacement_z!(
-    uz::AbstractArray{T},
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_z!(uz, action::ArbitraryAction, x, y, z, t)
     itp = interpolate(action.dz, Gridded(Linear()), Val(size(action.dz,1)))
     uz .= resample(itp, t)
     return nothing
 end
 
-
-
-
-function displacement_x(
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
-    itp = interpolate(action.dx, Gridded(Linear()), Val(size(action.dx,1)))
-    return resample(itp, t)
-end
-
-function displacement_y(
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
-    itp = interpolate(action.dy, Gridded(Linear()), Val(size(action.dy,1)))
-    uy = resample(itp, t)
-    m = minimum([size(uy,2), 8])
-    # println("t:  ", @view(t[1, 1:m]))
-    println("uy: ", @view(uy[1, 1:m]))
-    print("\n")
-    return uy
-end
-
-function displacement_z(
-    action::ArbitraryAction{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
-    itp = interpolate(action.dz, Gridded(Linear()), Val(size(action.dz,1)))
-    return resample(itp, t)
-end
 
 include("arbitraryactions/Path.jl")
 include("arbitraryactions/FlowPath.jl")

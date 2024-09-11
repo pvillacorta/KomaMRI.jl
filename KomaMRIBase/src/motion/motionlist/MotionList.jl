@@ -100,13 +100,7 @@ For each dimension (x, y, z), the output matrix has ``N_{\t{spins}}`` rows and `
 # Returns
 - `x, y, z`: (`::Tuple{AbstractArray, AbstractArray, AbstractArray}`) spin positions over time
 """
-function get_spin_coords(
-    ml::MotionList{T},
-    x::AbstractVector{T},
-    y::AbstractVector{T},
-    z::AbstractVector{T},
-    t::AbstractArray{T}
-) where {T<:Real}
+function get_spin_coords(ml::MotionList{T}, x, y, z, t) where {T<:Real}
     # Buffers for positions:
     xt, yt, zt = x .+ 0*t, y .+ 0*t, z .+ 0*t
     # Buffers for displacements:

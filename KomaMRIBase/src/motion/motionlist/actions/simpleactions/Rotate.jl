@@ -62,14 +62,7 @@ RotateZ(yaw::T) where {T<:Real}   = Rotate(zero(T), zero(T), yaw)
 
 is_composable(action::Rotate) = true
 
-function displacement_x!(
-    ux::AbstractArray{T},
-    action::Rotate{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_x!(ux, action::Rotate, x, y, z, t)
     α = t .* (action.yaw)
     β = t .* (action.roll)
     γ = t .* (action.pitch)
@@ -79,14 +72,7 @@ function displacement_x!(
     return nothing
 end
 
-function displacement_y!(
-    uy::AbstractArray{T},
-    action::Rotate{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_y!(uy, action::Rotate, x, y, z, t)
     α = t .* (action.yaw)
     β = t .* (action.roll)
     γ = t .* (action.pitch)
@@ -96,14 +82,7 @@ function displacement_y!(
     return nothing
 end
 
-function displacement_z!(
-    uz::AbstractArray{T},
-    action::Rotate{T},
-    x::AbstractArray{T},
-    y::AbstractArray{T},
-    z::AbstractArray{T},
-    t::AbstractArray{T},
-) where {T<:Real}
+function displacement_z!(uz, action::Rotate, x, y, z, t)
     α = t .* (action.yaw)
     β = t .* (action.roll)
     γ = t .* (action.pitch)
