@@ -21,8 +21,8 @@ end
 function reset_magnetization!(M::Mag{T}, Mxy::AbstractArray{Complex{T}}, action::FlowPath{T}, t, ρ) where {T<:Real}
    itp = KomaMRIBase.interpolate(action.spin_reset, KomaMRIBase.Gridded(KomaMRIBase.Constant{KomaMRIBase.Previous}()), Val(size(action.spin_reset, 1)))
    flags = KomaMRIBase.resample(itp, t)
-   reset = vec(any(flags; dims=2))
-   flags = .!(cumsum(flags; dims=2) .>= 1)
+   reset = vec(any(flags .> 0; dims=2))
+   flags = (cumsum(flags; dims=2) .== 0)
    Mxy .*= flags
    M.z[reset] = ρ[reset]
    return nothing
