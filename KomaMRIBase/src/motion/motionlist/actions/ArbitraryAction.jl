@@ -45,11 +45,11 @@ function interpolate(d::AbstractArray{T}, ITPType, Ns::Val) where {T<:Real}
     return GriddedInterpolation((id, t), d, ITPType)
 end
 
-function resample(itp::Interpolator1D{T}, t::AbstractArray{T}) where {T<:Real}
+function resample(itp::Interpolator1D{T}, t) where {T<:Real}
     return itp.(t)
 end
 
-function resample(itp::Interpolator2D{T}, t::AbstractArray{T}) where {T<:Real}
+function resample(itp::Interpolator2D{T}, t) where {T<:Real}
     Ns = size(itp.coefs, 1)
     id = similar(itp.coefs, Ns)
     copyto!(id, collect(range(oneunit(T), T(Ns), Ns)))
