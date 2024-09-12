@@ -64,7 +64,7 @@ is_composable(action::Rotate) = true
 
 function displacement_x!(ux, action::Rotate, x, y, z, t)   
     # Not using sind and cosd functions until bug with oneAPI is solved: 
-    # https://github.com/JuliaGPU/oneAPI.jl/issues/463 
+    # https://github.com/JuliaGPU/oneAPI.jl/issues/65
     α = t .* (action.yaw*π/180)
     β = t .* (action.roll*π/180)
     γ = t .* (action.pitch*π/180)
