@@ -492,12 +492,12 @@ end
         # Scanner
         sys = Scanner()
         # Simulation
-        @suppress for sim_method in [KomaMRICore.Bloch(), KomaMRICore.BlochSimple()]
+        for sim_method in [KomaMRICore.Bloch(), KomaMRICore.BlochSimple(), KomaMRICore.BlochDict()]
             sim_params = Dict{String, Any}(
                 "sim_method"=>sim_method,
                 "return_type"=>"mat"
             )
-            raw_aux = simulate(obj, seq, sys; sim_params)
+            raw_aux = @suppress simulate(obj, seq, sys; sim_params)
             raw = raw_aux[:, 1, 1]
 
             NMRSE(x, x_true) = sqrt.( sum(abs.(x .- x_true).^2) ./ sum(abs.(x_true).^2) ) * 100.
