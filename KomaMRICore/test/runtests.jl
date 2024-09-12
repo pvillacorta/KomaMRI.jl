@@ -446,7 +446,7 @@ end
         Rotate(0.0, 0.0, 45.0, TimeRange(0.0, 1.0)),
         HeartBeat(-0.6, 0.0, 0.0, Periodic(1.0)),
         Path([0.0 0.0], [0.0 1.0], [0.0 0.0], TimeRange(0.0, 10.0)),
-        FlowPath([0.0 0.0], [0.0 1.0], [0.0 0.0], [false false], TimeRange(0.0, 10.0))
+        FlowPath([0.0 0.0], [0.0 1.0], [0.0 0.0], [0.0 0.0], TimeRange(0.0, 10.0))
     ]
 
     x0 = [0.1]
@@ -464,7 +464,6 @@ end
         ## Solving using DiffEquations.jl
         function bloch!(dm, m, p, t)
             mx, my, mz = m
-            # bx, by, bz = [B1e(t) * cos(φ), B1e(t) * sin(φ), ΔBz(t/t_end)]
             bx, by, bz = [B1e(t) * cos(φ), B1e(t) * sin(φ), (x(t) * Gx + y(t) * Gy + z(t) * Gz)]
             dm[1] = -mx / T2 + γ * bz * my - γ * by * mz
             dm[2] = -γ * bz * mx - my / T2 + γ * bx * mz
@@ -493,17 +492,16 @@ end
         # Scanner
         sys = Scanner()
         # Simulation
-        for sim_method in [KomaMRICore.Bloch(), KomaMRICore.BlochSimple()]
+        @suppress for sim_method in [KomaMRICore.Bloch(), KomaMRICore.BlochSimple()]
             sim_params = Dict{String, Any}(
-                "gpu"=>USE_GPU,
                 "sim_method"=>sim_method,
                 "return_type"=>"mat"
             )
-            raw_aux = @suppress simulate(obj, seq, sys; sim_params)
+            raw_aux = simulate(obj, seq, sys; sim_params)
             raw = raw_aux[:, 1, 1]
 
             NMRSE(x, x_true) = sqrt.( sum(abs.(x .- x_true).^2) ./ sum(abs.(x_true).^2) ) * 100.
-            @test NMRSE(raw, mxy_diffeq) < 1 #NMRSE < 1%
+            @test NMRSE(raw, mxy_diffeq) < 1
         end
     end
 end
