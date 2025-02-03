@@ -226,6 +226,7 @@ function update_blink_window_progress!(w::String, block, Nblocks)
     progress = trunc(Int, block / Nblocks * 100)
     write(io,progress)
     close(io)
+    return nothing
  end
 
 """
