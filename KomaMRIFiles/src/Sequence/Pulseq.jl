@@ -839,3 +839,49 @@ function read_extension(extensionLibrary,extensionType,triggerLibrary,labelsetLi
 
     return EXT
  end
+
+ 
+"""
+    write_seq(seq, filename)
+"""
+function write_seq(
+    seq::Sequence, filename::String;
+    blockDurationRaster = get_blockDurationRaster(seq),
+    gradientRasterTime = get_gradientRasterTime(seq),
+    rfRasterTime = get_rfRasterTime(seq),
+    adcRasterTime = get_adcRasterTime(seq)
+)
+    @info "Saving sequence to $(basename(filename)) ..."
+    open(filename, "w") do io
+        write(io, "# Pulseq sequence file\n# Created by KomaMRI.jl\n\n")
+
+        # --------- VERSION ------------
+        write(io, "[VERSION]\n")
+        write(io, "major 1\nminor 5\nrevision 1\n\n")
+
+        # -------- DEFINITIONS ----------
+        write(io, "[DEFINITIONS]\n")
+        write(io, "BlockDurationRaster $blockDurationRaster\n")
+        write(io, "GradientRasterTime $gradientRasterTime\n")
+        write(io, "RadiofrequencyRasterTime $rfRasterTime\n")
+        write(io, "AdcRasterTime $adcRasterTime\n\n")
+
+        # ----------- BLOCKS ------------
+
+        # ------------- RF --------------
+
+        # --------- GRADIENTS -----------
+
+        # ------------ TRAP -------------
+
+        # ------------ ADC --------------
+
+        # --------- EXTENSIONS ----------
+
+        # ----------- SHAPES ------------
+
+        # ---------- SIGNATURE ----------
+
+    end
+    return nothing
+end
