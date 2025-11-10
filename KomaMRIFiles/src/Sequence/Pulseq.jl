@@ -52,25 +52,28 @@ function read_definitions(io)
 end
 
 """
-read_definitions Read the [SIGNATURE] section of a sequence file.
+read_signature Read the [SIGNATURE] section of a sequence file.
    signature=read_signature(fid) Read user signature from file
-   identifier of an open MR sequence file and return a map of
-   key/value entries.
+   identifier of an open MR sequence file and return a NamedTuple with signature metadata.
 """
 function read_signature(io)
-    signature = ""
+    signature_type = nothing
+    signature_hash = nothing
     while true
         line = readline(io)
         line_split = String.(split(line))
         (length(line_split) > 0) || break #Break on white space
+        firstchar = first(line_split[1])
+        firstchar == '#' && continue
         key = line_split[1]
-        if (key == "Hash")
-            value_string_array = line_split[2:end]
-            parsed_array = [tryparse(Float64, s) === nothing ? s : tryparse(Float64, s) for s = value_string_array]
-            signature = length(parsed_array) == 1 ? parsed_array[1] : parsed_array
+        value = join(line_split[2:end], " ")
+        if key == "Type"
+            signature_type = strip(value)
+        elseif key == "Hash"
+            signature_hash = lowercase(replace(strip(value), " " => ""))
         end
     end
-    return signature
+    return isnothing(signature_type) && isnothing(signature_hash) ? nothing : (type = signature_type, hash = signature_hash)
 end
 
 """
@@ -399,7 +402,7 @@ function read_seq(filename)
     pulseq_version = v"0.0.0"
     gradLibrary = Dict()
     def = Dict()
-    signature = ""
+    signature = nothing
     blockEvents = Dict()
     blockDurations = Dict()
     delayInd_tmp = Dict()
@@ -429,18 +432,18 @@ function read_seq(filename)
                 end
                 blockEvents, blockDurations, delayInd_tmp = read_blocks(io, def["BlockDurationRaster"], pulseq_version)
             elseif  section == "[RF]"
-                if version_combined >= v"1.5.0"
+                if pulseq_version >= v"1.5.0"
                     rfLibrary = read_events(io, [1/γ 1 1 1 1 1e-6 1 1 1 1 1]) # this is 1.5.x format
-                elseif version_combined >= v"1.4.0"
+                elseif pulseq_version >= v"1.4.0"
                     rfLibrary = read_events(io, [1/γ 1 1 1 1e-6 1 1]) # this is 1.4.x format
                 else
                     rfLibrary = read_events(io, [1/γ 1 1 1e-6 1 1]) # this is 1.3.x and below
                     # we will have to scan through the library later after all the shapes have been loaded
                 end
             elseif  section == "[GRADIENTS]"
-                if version_combined >= v"1.5.0"
+                if pulseq_version >= v"1.5.0"
                     gradLibrary = read_events(io, [1/γ 1 1 1 1 1e-6]; type='g', eventLibrary=gradLibrary) # this is 1.5.x format
-                elseif version_combined >= v"1.4.0"
+                elseif pulseq_version >= v"1.4.0"
                     gradLibrary = read_events(io, [1/γ 1 1 1e-6]; type='g', eventLibrary=gradLibrary) # this is 1.4.x format
                 else
                     gradLibrary = read_events(io, [1/γ 1 1e-6];   type='g', eventLibrary=gradLibrary) # this is 1.3.x and below
@@ -448,7 +451,7 @@ function read_seq(filename)
             elseif  section == "[TRAP]"
                 gradLibrary = read_events(io, [1/γ 1e-6 1e-6 1e-6 1e-6]; type='t', eventLibrary=gradLibrary);
             elseif  section == "[ADC]"
-                if version_combined >= 1005000
+                if pulseq_version >= v"1.5.0"
                     adcLibrary = read_events(io, [1 1e-9 1e-6 1 1 1 1 1]) # this is 1.5.x format
                 else
                     adcLibrary = read_events(io, [1 1e-9 1e-6 1 1]) # this is 1.4.x and below
@@ -491,6 +494,7 @@ function read_seq(filename)
 
         end
     end
+    verify_signature!(filename, signature)
     # fix blocks, gradients and RF objects imported from older versions
     if pulseq_version < v"1.4.0"
         # scan through the RF objects
@@ -552,7 +556,7 @@ function read_seq(filename)
         seq += get_block(obj, i)
     end
     # Add first and last points for gradients #320 for version <= 1.4.2
-    if version_combined < 1005000
+    if pulseq_version < v"1.5.0"
         fix_first_last_grads!(seq)
     end
     # Final details
@@ -561,7 +565,6 @@ function read_seq(filename)
     # Koma specific details for reconstrucion
     seq.DEF["FileName"] = basename(filename)
     seq.DEF["PulseqVersion"] = pulseq_version
-    seq.DEF["signature"] = signature
     # Guessing recon dimensions
     seq.DEF["Nx"] = get(seq.DEF, "Nx", maximum(adc.N for adc = seq.ADC))
     seq.DEF["Nz"] = get(seq.DEF, "Nz", length(unique(seq.RF.Δf)))
@@ -840,48 +843,270 @@ function read_extension(extensionLibrary,extensionType,triggerLibrary,labelsetLi
     return EXT
  end
 
- 
+# ----------------- Write Pulseq -----------------
 """
     write_seq(seq, filename)
 """
+Base.@kwdef struct PulseqExportContext
+    seq::Sequence
+    filename::String
+    version::VersionNumber = v"1.5.1"
+    blockDurationRaster::Float64
+    gradientRasterTime::Float64
+    rfRasterTime::Float64
+    adcRasterTime::Float64
+end
+
+Base.@kwdef struct PulseqBlock
+    id::Int
+    duration::Float64
+    rf::Int = 0
+    gx::Int = 0
+    gy::Int = 0
+    gz::Int = 0
+    adc::Int = 0
+    ext::Int = 0
+end
+
+Base.@kwdef struct PulseqExportAssets
+    blocks::Vector{PulseqBlock} = PulseqBlock[]
+    rf::Dict{Int,Any} = Dict{Int,Any}()
+    gradients::Dict{Int,Any} = Dict{Int,Any}()
+    trapezoids::Dict{Int,Any} = Dict{Int,Any}()
+    adc::Dict{Int,Any} = Dict{Int,Any}()
+    shapes::Dict{Int,Tuple{Int,Vector{Float64}}} = Dict{Int,Tuple{Int,Vector{Float64}}}()
+    extensions::Dict{Int,Any} = Dict{Int,Any}()
+end
+
+function PulseqExportContext(
+    seq::Sequence,
+    filename::String;
+    pulseq_version::VersionNumber = v"1.5.1",
+    blockDurationRaster = nothing,
+    gradientRasterTime = nothing,
+    rfRasterTime = nothing,
+    adcRasterTime = nothing,
+)
+    defs = seq.DEF
+    resolve(key, fallback) = begin
+        if haskey(defs, key)
+            convert(Float64, defs[key])
+        else
+            fallback()
+        end
+    end
+    ctx = PulseqExportContext(
+        seq = seq,
+        filename = filename,
+        version = pulseq_version,
+        blockDurationRaster = something(blockDurationRaster, resolve("BlockDurationRaster", ()->default_blockDurationRaster(seq))),
+        gradientRasterTime = something(gradientRasterTime, resolve("GradientRasterTime", ()->default_gradientRasterTime(seq))),
+        rfRasterTime = something(rfRasterTime, resolve("RadiofrequencyRasterTime", ()->default_rfRasterTime(seq))),
+        adcRasterTime = something(adcRasterTime, resolve("AdcRasterTime", ()->default_adcRasterTime(seq))),
+    )
+    ctx
+end
+
+default_blockDurationRaster(seq::Sequence) = get(seq.DEF, "BlockDurationRaster", 1e-5)
+default_gradientRasterTime(seq::Sequence)  = get(seq.DEF, "GradientRasterTime", 1e-5)
+default_rfRasterTime(seq::Sequence)        = get(seq.DEF, "RadiofrequencyRasterTime", 1e-6)
+default_adcRasterTime(seq::Sequence)       = get(seq.DEF, "AdcRasterTime", 1e-7)
+
+get_blockDurationRaster(seq::Sequence) = default_blockDurationRaster(seq)
+get_gradientRasterTime(seq::Sequence)  = default_gradientRasterTime(seq)
+get_rfRasterTime(seq::Sequence)        = default_rfRasterTime(seq)
+get_adcRasterTime(seq::Sequence)       = default_adcRasterTime(seq)
+
+"""
+    collect_pulseq_assets(ctx::PulseqExportContext) -> PulseqExportAssets
+
+Create the Pulseq export dictionaries required to serialize `ctx.seq` into the 1.5.1 file format.
+This function is responsible for deduplicating reusable objects (RF, gradients, shapes, etc.)
+and for translating each sequence block into the integer lookups expected by the specification.
+"""
+function collect_pulseq_assets(ctx::PulseqExportContext)
+    assets = PulseqExportAssets()
+    # TODO: populate `assets` in subsequent iterations.
+    assets
+end
+
+"""
+    emit_pulseq(io::IO, ctx::PulseqExportContext, assets::PulseqExportAssets)
+
+Write the Pulseq sections to `io`, using the already prepared `assets`. Each section writer
+should focus on formatting only and keep any data massaging outside of the emit stage.
+"""
+function emit_pulseq(io::IO, ctx::PulseqExportContext, assets::PulseqExportAssets)
+    emit_header_comment!(io)
+    emit_version_section!(io, ctx)
+    emit_definitions_section!(io, ctx)
+    if isempty(assets.blocks)
+        @warn "Pulseq export: block table is empty; populate it via `collect_pulseq_assets`."
+    else
+        emit_blocks_section!(io, ctx, assets)
+    end
+    if !isempty(assets.rf)
+        emit_rf_section!(io, ctx, assets)
+    end
+    if !isempty(assets.gradients) || !isempty(assets.trapezoids)
+        emit_gradient_sections!(io, ctx, assets)
+    end
+    if !isempty(assets.adc)
+        emit_adc_section!(io, ctx, assets)
+    end
+    if !isempty(assets.extensions)
+        emit_extension_section!(io, ctx, assets)
+    end
+    if !isempty(assets.shapes)
+        emit_shapes_section!(io, ctx, assets)
+    end
+end
+
+emit_header_comment!(io::IO) = write(io, "# Pulseq sequence file\n# Created by KomaMRI.jl\n\n")
+
+function emit_version_section!(io::IO, ctx::PulseqExportContext)
+    write(io, "[VERSION]\n")
+    write(io, "major $(ctx.version.major)\n")
+    write(io, "minor $(ctx.version.minor)\n")
+    write(io, "revision $(ctx.version.patch)\n\n")
+end
+
+function emit_definitions_section!(io::IO, ctx::PulseqExportContext)
+    write(io, "[DEFINITIONS]\n")
+    write(io, "BlockDurationRaster $(ctx.blockDurationRaster)\n")
+    write(io, "GradientRasterTime $(ctx.gradientRasterTime)\n")
+    write(io, "RadiofrequencyRasterTime $(ctx.rfRasterTime)\n")
+    write(io, "AdcRasterTime $(ctx.adcRasterTime)\n\n")
+end
+
+emit_blocks_section!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[BLOCKS] emission not implemented yet"
+emit_rf_section!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[RF] emission not implemented yet"
+emit_gradient_sections!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[GRADIENTS]/[TRAP] emission not implemented yet"
+emit_adc_section!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[ADC] emission not implemented yet"
+emit_extension_section!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[EXTENSIONS] emission not implemented yet"
+emit_shapes_section!(io::IO, ::PulseqExportContext, ::PulseqExportAssets) = @warn "[SHAPES] emission not implemented yet"
+
+function emit_signature_section!(io::IO, algorithm::AbstractString, hash_value::AbstractString)
+    write(io, "[SIGNATURE]\n")
+    write(io, "Type $(algorithm)\n")
+    write(io, "Hash $(hash_value)\n\n")
+end
+
+function supported_signature_digest(algorithm::AbstractString, payload::Vector{UInt8})
+    alg = lowercase(strip(algorithm))
+    digest = if alg == "md5"
+        md5(payload)
+    elseif alg == "sha1"
+        sha1(payload)
+    elseif alg in ("sha2", "sha256")
+        sha256(payload)
+    else
+        throw(ArgumentError("Unsupported signature algorithm '$algorithm'. Supported algorithms: md5, sha1, sha256."))
+    end
+    lowercase(bytes2hex(digest))
+end
+
+function extract_signature_payload(text::AbstractString)
+    sig_range = findfirst(r"\[SIGNATURE\]", text)
+    sig_range === nothing && return text, nothing
+    sig_start = first(sig_range)
+    separator_index = prevind(text, sig_start)
+    payload = if separator_index < firstindex(text)
+        ""
+    elseif text[separator_index] in ['\n', '\r']
+        payload_end = prevind(text, separator_index)
+        payload_end < firstindex(text) ? "" : text[firstindex(text):payload_end]
+    else
+        text[firstindex(text):separator_index]
+    end
+    signature_section = text[sig_start:end]
+    payload, signature_section
+end
+
+function parse_signature_section(section::AbstractString)
+    io = IOBuffer(section)
+    readline(io) # consume "[SIGNATURE]" header
+    signature_type = nothing
+    signature_hash = nothing
+    while !eof(io)
+        line = strip(readline(io))
+        isempty(line) && continue
+        startswith(line, '#') && continue
+        parts = split(line)
+        isempty(parts) && continue
+        key = parts[1]
+        value = join(parts[2:end], " ")
+        if key == "Type"
+            signature_type = strip(value)
+        elseif key == "Hash"
+            signature_hash = lowercase(replace(strip(value), " " => ""))
+        end
+    end
+    return isnothing(signature_type) && isnothing(signature_hash) ? nothing : (type = signature_type, hash = signature_hash)
+end
+
+function verify_signature!(filename::String, signature::Union{Nothing,NamedTuple})
+    isnothing(signature) && begin
+        @warn "Pulseq [SIGNATURE] section is missing; skipping verification." filename
+        return
+    end
+    sig_type = signature.type
+    sig_hash = signature.hash
+    file_text = read(filename, String)
+    payload, sig_section = extract_signature_payload(file_text)
+    isnothing(sig_section) && begin
+        @warn "Signature section expected but not found when verifying Pulseq file." filename
+        return
+    end
+    parsed = parse_signature_section(sig_section)
+    isnothing(parsed) && begin
+        @warn "Failed to parse Pulseq signature section; skipping verification." filename
+        return
+    end
+    parsed_type = parsed.type
+    parsed_hash = parsed.hash
+    if !isnothing(parsed_type) && !isempty(parsed_type) && lowercase(parsed_type) != lowercase(sig_type)
+        @warn "Pulseq signature Type mismatch between parser and metadata. Using '$sig_type'." filename parsed_type
+    end
+    if !isnothing(parsed_hash) && !isempty(parsed_hash)
+        parsed_hash_norm = lowercase(replace(parsed_hash, " " => ""))
+        if parsed_hash_norm != lowercase(replace(sig_hash, " " => ""))
+            @warn "Pulseq signature Hash mismatch between parser and metadata. Using metadata value." filename
+        end
+    end
+    expected_hash = lowercase(replace(sig_hash, " " => ""))
+    payload_bytes = Vector{UInt8}(codeunits(payload))
+    computed_hash = supported_signature_digest(sig_type, payload_bytes)
+    computed_hash == expected_hash || error("Pulseq signature verification failed for $(basename(filename)). Expected $(expected_hash), computed $(computed_hash).")
+end
+
 function write_seq(
     seq::Sequence, filename::String;
     blockDurationRaster = get_blockDurationRaster(seq),
     gradientRasterTime = get_gradientRasterTime(seq),
     rfRasterTime = get_rfRasterTime(seq),
-    adcRasterTime = get_adcRasterTime(seq)
+    adcRasterTime = get_adcRasterTime(seq),
+    signatureAlgorithm::AbstractString = "md5"
 )
     @info "Saving sequence to $(basename(filename)) ..."
+    ctx = PulseqExportContext(
+        seq,
+        filename;
+        pulseq_version = v"1.5.1",
+        blockDurationRaster = blockDurationRaster,
+        gradientRasterTime = gradientRasterTime,
+        rfRasterTime = rfRasterTime,
+        adcRasterTime = adcRasterTime,
+    )
+    assets = collect_pulseq_assets(ctx)
+    buffer = IOBuffer()
+    emit_pulseq(buffer, ctx, assets)
+    payload = take!(buffer)
+    signature_hash = supported_signature_digest(signatureAlgorithm, payload)
     open(filename, "w") do io
-        write(io, "# Pulseq sequence file\n# Created by KomaMRI.jl\n\n")
-
-        # --------- VERSION ------------
-        write(io, "[VERSION]\n")
-        write(io, "major 1\nminor 5\nrevision 1\n\n")
-
-        # -------- DEFINITIONS ----------
-        write(io, "[DEFINITIONS]\n")
-        write(io, "BlockDurationRaster $blockDurationRaster\n")
-        write(io, "GradientRasterTime $gradientRasterTime\n")
-        write(io, "RadiofrequencyRasterTime $rfRasterTime\n")
-        write(io, "AdcRasterTime $adcRasterTime\n\n")
-
-        # ----------- BLOCKS ------------
-
-        # ------------- RF --------------
-
-        # --------- GRADIENTS -----------
-
-        # ------------ TRAP -------------
-
-        # ------------ ADC --------------
-
-        # --------- EXTENSIONS ----------
-
-        # ----------- SHAPES ------------
-
-        # ---------- SIGNATURE ----------
-
+        write(io, payload)
+        write(io, '\n')
+        emit_signature_section!(io, signatureAlgorithm, signature_hash)
     end
     return nothing
 end
