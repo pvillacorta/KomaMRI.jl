@@ -7,23 +7,21 @@ struct Preparation <: RFUse end
 struct Other <: RFUse end
 struct Undefined <: RFUse end
 
-const RF_USE_CHARS = Dict(
-    'e' => Excitation(),
-    'r' => Refocusing(),
-    'i' => Inversion(),
-    's' => Saturation(),
-    'p' => Preparation(),
-    'o' => Other(),
-    'u' => Undefined(),
-)
+get_RF_use_from_char(::Val{'e'}) = Excitation()
+get_RF_use_from_char(::Val{'r'}) = Refocusing()
+get_RF_use_from_char(::Val{'i'}) = Inversion()
+get_RF_use_from_char(::Val{'s'}) = Saturation()
+get_RF_use_from_char(::Val{'p'}) = Preparation()
+get_RF_use_from_char(::Val{'o'}) = Other()
+get_RF_use_from_char(::Val{'u'}) = Undefined()
 
-get_RF_use_from_char(c::Char) = RF_USE_CHARS[c]
-get_char_from_RF_use(use::RFUse) = begin
-    for (k, v) in RF_USE_CHARS
-        if v == use return k end
-    end
-    return 'u'
-end
+get_char_from_RF_use(::Excitation)  = 'e'
+get_char_from_RF_use(::Refocusing)  = 'r'
+get_char_from_RF_use(::Inversion)   = 'i'
+get_char_from_RF_use(::Saturation)  = 's'
+get_char_from_RF_use(::Preparation) = 'p'
+get_char_from_RF_use(::Other)       = 'o'
+get_char_from_RF_use(::Undefined)   = 'u'
 
 """
     rf = RF(A, T)
