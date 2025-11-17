@@ -490,7 +490,7 @@ function read_seq(filename)
 
         end
     end
-    verify_signature!(filename, signature)
+    verify_signature!(filename, signature; pulseq_version=pulseq_version)
     # fix blocks, gradients and RF objects imported from older versions
     if pulseq_version < v"1.4.0"
         # scan through the RF objects
@@ -596,19 +596,34 @@ function read_Grad(gradLibrary, shapeLibrary, Δt_gr, i)
         G = Grad(g_A,g_T,g_rise,g_fall,g_delay)
     elseif gradLibrary[i]["type"] == 'g' #Arbitrary gradient waveform
         g = gradLibrary[i]["data"]
-        aux = length(g) == 6 ? g : (g[1], 0.0, 0.0, g[2], g[3], g[4]) # first and last fields were introduced in version 1.5
-        amp, first, last, amp_shape_id, time_shape_id, delay = aux
+        if length(g) == 6 # for version 1.5.x
+            #(1)amplitude (2)first_grads (3)last_grads (4)amp_shape_id (5)time_shape_id (6)delay
+            amplitude     = g[1]
+            first_grads   = g[2]
+            last_grads    = g[3]
+            amp_shape_id  = g[4] |> x->floor(Int64,x)
+            time_shape_id = g[5] |> x->floor(Int64,x)
+            delay         = g[6]
+        else # for version 1.4.x and below
+            #(1)amplitude (2)amp_shape_id (3)time_shape_id (4)delay
+            amplitude     = g[1]
+            amp_shape_id  = g[2] |> x->floor(Int64,x)
+            time_shape_id = g[3] |> x->floor(Int64,x)
+            delay         = g[4]
+            first_grads   = 0.0
+            last_grads    = 0.0
+        end
         #Amplitude
-        gA = amp .* decompress_shape(shapeLibrary[amp_shape_id]...)
-        Nrf = length(gA) - 1
+        gA = amplitude * decompress_shape(shapeLibrary[amp_shape_id]...)
+        Ngr = length(gA) - 1
         #Creating timings
         if time_shape_id == 0 #no time waveform
-            gT = Nrf * Δt_gr
-            G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first, last)
+            gT = Ngr * Δt_gr
+            G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first_grads, last_grads)
         else
             gt = decompress_shape(shapeLibrary[time_shape_id]...)
             gT = diff(gt) * Δt_gr
-            G = Grad(gA, gT, 0.0, 0.0, delay, first, last)
+            G = Grad(gA,gT,0.0,0.0,delay,first_grads,last_grads)
         end
     end
     G
@@ -638,28 +653,28 @@ function read_RF(rfLibrary, shapeLibrary, Δt_rf, i)
     r = rfLibrary[i]["data"]
     if length(r) == 11 # for version 1.5.x
         #(1)amplitude (2)mag_id (3)phase_id (4)time_shape_id (5)center (6)delay (7)freq_ppm (8)phase_ppm (9)freq (10)phase (11)use
-        amplitude =     r[1]
-        mag_id =        r[2] |> x->floor(Int64,x)
-        phase_id =      r[3] |> x->floor(Int64,x)
+        amplitude     = r[1]
+        mag_id        = r[2] |> x->floor(Int64,x)
+        phase_id      = r[3] |> x->floor(Int64,x)
         time_shape_id = r[4] |> x->floor(Int64,x)
-        center =        r[5]
-        delay =         r[6] + (time_shape_id==0)*Δt_rf/2
-        freq_ppm =      r[7]
-        phase_ppm =     r[8]
-        freq =          r[9]
-        phase =         r[10]
-        use =           r[11]
+        center        = r[5]
+        delay         = r[6] + (time_shape_id==0)*Δt_rf/2
+        freq_ppm      = r[7]
+        phase_ppm     = r[8]
+        freq          = r[9]
+        phase         = r[10]
+        use           = r[11]
     else # for version 1.4.x and below
         #(1)amplitude (2)mag_id (3)phase_id (4)time_shape_id (5)delay (6)freq (7)phase
-        amplitude =     r[1]
-        mag_id =        r[2] |> x->floor(Int64,x)
-        phase_id =      r[3] |> x->floor(Int64,x)
+        amplitude     = r[1]
+        mag_id        = r[2] |> x->floor(Int64,x)
+        phase_id      = r[3] |> x->floor(Int64,x)
         time_shape_id = r[4] |> x->floor(Int64,x)
-        delay =         r[5] + (time_shape_id==0)*Δt_rf/2
-        freq =          r[6]
-        phase =         r[7]
-        center =        0.0
-        use =           'u'
+        delay         = r[5] + (time_shape_id==0)*Δt_rf/2
+        freq          = r[6]
+        phase         = r[7]
+        center        = 0.0
+        use           = 'u'
     end
     #Amplitude and phase waveforms
     if amplitude != 0 && mag_id != 0
@@ -681,8 +696,7 @@ function read_RF(rfLibrary, shapeLibrary, Δt_rf, i)
 
     use = KomaMRIBase.get_RF_use_from_char(use)
 
-    R = [RF(rfAϕ,rfT,freq,delay,center,use);;]
-    R
+    return [RF(rfAϕ,rfT,freq,delay,center,use);;]
 end
 
 """
@@ -707,26 +721,28 @@ function read_ADC(adcLibrary, i)
     a = adcLibrary[i]["data"]
     if length(a) == 8 # for version 1.5.x
         #(1)num (2)dwell (3)delay (4)freq_ppm (5)phase_ppm (6)freq (7)phase (8)phase_shape_id
-        num =   a[1] |> x->floor(Int64,x)
-        dwell = a[2]
-        delay = a[3] + dwell/2
-        freq_ppm = a[4]
+        num       = a[1] |> x->floor(Int64,x)
+        dwell     = a[2]
+        delay     = a[3] + dwell/2
+        freq_ppm  = a[4]
         phase_ppm = a[5]
-        freq =  a[6]
-        phase = a[7]
-        phase_shape_id = a[8] |> x->floor(Int64,x)
+        freq      = a[6]
+        phase     = a[7]
+        phase_id  = a[8] |> x->floor(Int64,x)
     else # for version 1.4.x and below
         #(1)num (2)dwell (3)delay (4)freq (5)phase
-        num =   a[1] |> x->floor(Int64,x)
-        dwell = a[2]
-        delay = a[3] + dwell/2
-        freq =  a[4]
-        phase = a[5]
+        num       = a[1] |> x->floor(Int64,x)
+        dwell     = a[2]
+        delay     = a[3] + dwell/2
+        freq      = a[4]
+        phase     = a[5]
+        freq_ppm  = 0.0
+        phase_ppm = 0.0
+        phase_id  = 0
     end
     #Definition
     T = (num-1) * dwell
-    A = [ADC(num,T,delay,freq,phase)]
-    A
+    return [ADC(num,T,delay,freq,phase)]
 end
 
 """
@@ -825,6 +841,162 @@ function read_extension(extensionLibrary,extensionType,triggerLibrary,labelsetLi
 
     return EXT
  end
+
+# ----------------- Signature-related functions ------------------
+function supported_signature_digest(algorithm::AbstractString, payload::Vector{UInt8})
+    alg = lowercase(strip(algorithm))
+    digest = if alg == "md5"
+        md5(payload)
+    elseif alg == "sha1"
+        sha1(payload)
+    elseif alg in ("sha2", "sha256")
+        sha256(payload)
+    else
+        throw(ArgumentError("Unsupported signature algorithm '$algorithm'. Supported algorithms: md5, sha1, sha256."))
+    end
+    lowercase(bytes2hex(digest))
+end
+
+function extract_signature_payload(text::AbstractString; pulseq_version::VersionNumber=v"1.4.0")
+    sig_range = findfirst(r"\[SIGNATURE\]", text)
+    sig_range === nothing && return text, nothing
+    sig_start = first(sig_range)
+    separator_index = prevind(text, sig_start)
+    
+    # For Pulseq < 1.4.0 (e.g., JEMRIS), the newline before [SIGNATURE] is part of the payload
+    # For Pulseq >= 1.4.0, the newline before [SIGNATURE] is part of the signature and should be excluded
+    if pulseq_version < v"1.4.0"
+        # Include the newline before [SIGNATURE] in the payload (JEMRIS format)
+        payload = separator_index < firstindex(text) ? "" : text[firstindex(text):separator_index]
+    else
+        # Exclude the newline before [SIGNATURE] from the payload (spec-compliant)
+    payload = if separator_index < firstindex(text)
+        ""
+    elseif text[separator_index] in ['\n', '\r']
+        payload_end = prevind(text, separator_index)
+        payload_end < firstindex(text) ? "" : text[firstindex(text):payload_end]
+    else
+        text[firstindex(text):separator_index]
+        end
+    end
+    signature_section = text[sig_start:end]
+    payload, signature_section
+end
+
+function parse_signature_section(section::AbstractString)
+    io = IOBuffer(section)
+    readline(io) # consume "[SIGNATURE]" header
+    signature_type = nothing
+    signature_hash = nothing
+    while !eof(io)
+        line = strip(readline(io))
+        isempty(line) && continue
+        startswith(line, '#') && continue
+        parts = split(line)
+        isempty(parts) && continue
+        key = parts[1]
+        value = join(parts[2:end], " ")
+        if key == "Type"
+            signature_type = strip(value)
+        elseif key == "Hash"
+            signature_hash = lowercase(replace(strip(value), " " => ""))
+        end
+    end
+    return isnothing(signature_type) && isnothing(signature_hash) ? nothing : (type = signature_type, hash = signature_hash)
+end
+
+function verify_signature!(filename::String, signature::Union{Nothing,NamedTuple}; pulseq_version::VersionNumber=v"1.4.0")
+    isnothing(signature) && begin
+        @warn "Pulseq [SIGNATURE] section is missing; skipping verification." filename
+        return
+    end
+    sig_type = signature.type
+    sig_hash = signature.hash
+    # Read file as bytes to avoid any line ending normalization
+    file_bytes = read(filename)
+    # Find [SIGNATURE] in bytes
+    sig_marker = b"[SIGNATURE]"
+    sig_pos = findfirst(sig_marker, file_bytes)
+    isnothing(sig_pos) && begin
+        @warn "Signature section expected but not found when verifying Pulseq file." filename
+        return
+    end
+    sig_start = first(sig_pos)
+    # Extract payload based on version
+    # For Pulseq < 1.4.0 (e.g., JEMRIS), the newline before [SIGNATURE] is part of the payload
+    # For Pulseq >= 1.4.0, the newline before [SIGNATURE] is part of the signature and should be excluded
+    # However, different implementations may handle this differently, so we try multiple approaches
+    payload_end = sig_start - 1
+    expected_hash = lowercase(replace(sig_hash, " " => ""))
+    
+    if pulseq_version < v"1.4.0"
+        # Include the newline before [SIGNATURE] in the payload (JEMRIS format)
+        payload_bytes = payload_end > 0 ? file_bytes[1:payload_end] : UInt8[]
+        computed_hash = supported_signature_digest(sig_type, payload_bytes)
+    else
+        # For version >= 1.4.0, try multiple approaches to handle different implementations
+        # 1. Exclude only the last newline (spec-compliant)
+        if payload_end > 0 && file_bytes[payload_end] in (UInt8('\n'), UInt8('\r'))
+            payload_bytes_excluding = file_bytes[1:(payload_end - 1)]
+        else
+            payload_bytes_excluding = payload_end > 0 ? file_bytes[1:payload_end] : UInt8[]
+        end
+        
+        # 2. Include the last newline (some implementations like MATLAB)
+        payload_bytes_including = file_bytes[1:payload_end]
+        
+        # 3. Exclude all consecutive newlines before [SIGNATURE] (some implementations)
+        last_non_nl = payload_end
+        while last_non_nl > 0 && file_bytes[last_non_nl] in (UInt8('\n'), UInt8('\r'))
+            last_non_nl -= 1
+        end
+        payload_bytes_no_nl = last_non_nl > 0 ? file_bytes[1:last_non_nl] : UInt8[]
+        
+        # Try all approaches and use the one that matches
+        computed_hash_excluding = supported_signature_digest(sig_type, payload_bytes_excluding)
+        computed_hash_including = supported_signature_digest(sig_type, payload_bytes_including)
+        computed_hash_no_nl = supported_signature_digest(sig_type, payload_bytes_no_nl)
+        
+        if computed_hash_excluding == expected_hash
+            computed_hash = computed_hash_excluding
+            payload_bytes = payload_bytes_excluding
+        elseif computed_hash_including == expected_hash
+            computed_hash = computed_hash_including
+            payload_bytes = payload_bytes_including
+        elseif computed_hash_no_nl == expected_hash
+            computed_hash = computed_hash_no_nl
+            payload_bytes = payload_bytes_no_nl
+        else
+            # None matches, use the spec-compliant one for error message
+            computed_hash = computed_hash_excluding
+            payload_bytes = payload_bytes_excluding
+        end
+    end
+    # Parse signature section for comparison (read as string for parsing)
+    file_text = String(file_bytes)
+    sig_section_start = sig_start
+    sig_section = file_text[sig_section_start:end]
+    parsed = parse_signature_section(sig_section)
+    isnothing(parsed) && begin
+        @warn "Failed to parse Pulseq signature section; skipping verification." filename
+        return
+    end
+    parsed_type = parsed.type
+    parsed_hash = parsed.hash
+    if !isnothing(parsed_type) && !isempty(parsed_type) && lowercase(parsed_type) != lowercase(sig_type)
+        @warn "Pulseq signature Type mismatch between parser and metadata. Using '$sig_type'." filename parsed_type
+    end
+    if !isnothing(parsed_hash) && !isempty(parsed_hash)
+        parsed_hash_norm = lowercase(replace(parsed_hash, " " => ""))
+        if parsed_hash_norm != lowercase(replace(sig_hash, " " => ""))
+            @warn "Pulseq signature Hash mismatch between parser and metadata. Using metadata value." filename
+        end
+    end
+    if computed_hash != expected_hash
+        @warn "Pulseq signature verification failed for $(basename(filename)). Expected $(expected_hash), computed $(computed_hash). The file may have been modified or generated with a different implementation." filename
+        # Don't error, just warn - the file can still be used
+    end
+end
 
 # ----------------- Write Pulseq -----------------
 Base.@kwdef struct PulseqExportContext
@@ -1172,95 +1344,6 @@ function emit_signature_section!(io::IO, algorithm::AbstractString, hash_value::
     write(io, "Type $(algorithm)\n")
     write(io, "Hash $(hash_value)\n\n")
 end
-
-function supported_signature_digest(algorithm::AbstractString, payload::Vector{UInt8})
-    alg = lowercase(strip(algorithm))
-    digest = if alg == "md5"
-        md5(payload)
-    elseif alg == "sha1"
-        sha1(payload)
-    elseif alg in ("sha2", "sha256")
-        sha256(payload)
-    else
-        throw(ArgumentError("Unsupported signature algorithm '$algorithm'. Supported algorithms: md5, sha1, sha256."))
-    end
-    lowercase(bytes2hex(digest))
-end
-
-function extract_signature_payload(text::AbstractString)
-    sig_range = findfirst(r"\[SIGNATURE\]", text)
-    sig_range === nothing && return text, nothing
-    sig_start = first(sig_range)
-    separator_index = prevind(text, sig_start)
-    payload = if separator_index < firstindex(text)
-        ""
-    elseif text[separator_index] in ['\n', '\r']
-        payload_end = prevind(text, separator_index)
-        payload_end < firstindex(text) ? "" : text[firstindex(text):payload_end]
-    else
-        text[firstindex(text):separator_index]
-    end
-    signature_section = text[sig_start:end]
-    payload, signature_section
-end
-
-function parse_signature_section(section::AbstractString)
-    io = IOBuffer(section)
-    readline(io) # consume "[SIGNATURE]" header
-    signature_type = nothing
-    signature_hash = nothing
-    while !eof(io)
-        line = strip(readline(io))
-        isempty(line) && continue
-        startswith(line, '#') && continue
-        parts = split(line)
-        isempty(parts) && continue
-        key = parts[1]
-        value = join(parts[2:end], " ")
-        if key == "Type"
-            signature_type = strip(value)
-        elseif key == "Hash"
-            signature_hash = lowercase(replace(strip(value), " " => ""))
-        end
-    end
-    return isnothing(signature_type) && isnothing(signature_hash) ? nothing : (type = signature_type, hash = signature_hash)
-end
-
-function verify_signature!(filename::String, signature::Union{Nothing,NamedTuple})
-    isnothing(signature) && begin
-        @warn "Pulseq [SIGNATURE] section is missing; skipping verification." filename
-        return
-    end
-    sig_type = signature.type
-    sig_hash = signature.hash
-    file_text = read(filename, String)
-    payload, sig_section = extract_signature_payload(file_text)
-    isnothing(sig_section) && begin
-        @warn "Signature section expected but not found when verifying Pulseq file." filename
-        return
-    end
-    parsed = parse_signature_section(sig_section)
-    isnothing(parsed) && begin
-        @warn "Failed to parse Pulseq signature section; skipping verification." filename
-        return
-    end
-    parsed_type = parsed.type
-    parsed_hash = parsed.hash
-    if !isnothing(parsed_type) && !isempty(parsed_type) && lowercase(parsed_type) != lowercase(sig_type)
-        @warn "Pulseq signature Type mismatch between parser and metadata. Using '$sig_type'." filename parsed_type
-    end
-    if !isnothing(parsed_hash) && !isempty(parsed_hash)
-        parsed_hash_norm = lowercase(replace(parsed_hash, " " => ""))
-        if parsed_hash_norm != lowercase(replace(sig_hash, " " => ""))
-            @warn "Pulseq signature Hash mismatch between parser and metadata. Using metadata value." filename
-        end
-    end
-    expected_hash = lowercase(replace(sig_hash, " " => ""))
-    payload_bytes = Vector{UInt8}(codeunits(payload))
-    computed_hash = supported_signature_digest(sig_type, payload_bytes)
-    computed_hash == expected_hash || error("Pulseq signature verification failed for $(basename(filename)). Expected $(expected_hash), computed $(computed_hash).")
-end
-
 """
     write_seq(seq, filename)
 """

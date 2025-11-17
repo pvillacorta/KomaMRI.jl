@@ -58,10 +58,10 @@ mutable struct RF
     center
     use::RFUse
     RF(A, T, Δf, delay, center, use) = any(T .< 0) || delay < 0 ? error("RF timings must be non-negative.") : new(A, T, Δf, delay, center, use)
-    RF(A, T, Δf, delay, center) = RF(A, T, Δf, delay, center, Undefined())
-    RF(A, T, Δf, delay) = RF(A, T, Δf, delay, 0.0)
-    RF(A, T, Δf) = RF(A, T, Δf, 0.0)
-    RF(A, T) = RF(A, T, 0.0)
+    RF(A, T, Δf, delay, center)      = RF(A, T, Δf,  delay, center, Undefined())
+    RF(A, T, Δf, delay)              = RF(A, T, Δf,  delay, 0.0,    Undefined())
+    RF(A, T, Δf)                     = RF(A, T, Δf,  0.0,   0.0,    Undefined())
+    RF(A, T)                         = RF(A, T, 0.0, 0.0,   0.0,    Undefined())
 end
 
 """
@@ -121,11 +121,9 @@ getproperty(x::Matrix{RF}, f::Symbol) = begin
 end
 
 # RF comparison
-function Base.isapprox(rf1::RF, rf2::RF)
-    return all(length(getfield(rf1, k)) == length(getfield(rf2, k)) for k in fieldnames(RF))
-    return all(≈(getfield(rf1, k), getfield(rf2, k); atol=1e-9) for k in fieldnames(RF))
-end
-
+Base.:(≈)(rf1::RF, rf2::RF) = reduce(&, [getfield(rf1, field) ≈ getfield(rf2, field) for field in fieldnames(RF)])
+Base.:(≈)(u1::RFUse, u2::RFUse) = u1 == u2
+    
 # Properties
 size(r::RF, i::Int64) = 1 #To fix [r;r;;] concatenation of Julia 1.7.3
 *(α::Complex{T}, x::RF) where {T<:Real} = RF(α * x.A, x.T, x.Δf, x.delay)
