@@ -622,6 +622,9 @@ function read_Grad(gradLibrary, shapeLibrary, Δt_gr, i)
         if time_shape_id == 0 #no time waveform
             gT = Ngr * Δt_gr
             G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first_grads, last_grads)
+        elseif time_shape_id == -1 #regular sampling with oversampling
+            gT = fill(0.5 * Δt_gr, Ngr)
+            G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first_grads, last_grads)
         else
             gt = decompress_shape(shapeLibrary[time_shape_id]...)
             gT = diff(gt) * Δt_gr
@@ -1248,51 +1251,145 @@ function emit_blocks_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# Format of blocks:\n")
     write(io, "# NUM DUR RF  GX  GY  GZ  ADC  EXT\n")
     write(io, "[BLOCKS]\n")
-    for id in sort(collect(keys(assets.blocks)))
+    if isempty(assets.blocks)
+        return
+    end
+    block_ids = sort(collect(keys(assets.blocks)))
+    formats = [:int, :int, :int, :int, :int, :int, :int, :int]
+    
+    # Calculate max lengths directly
+    max_lengths = [0, 0, 0, 0, 0, 0, 0, 0]
+    for id in block_ids
         block = assets.blocks[id]
-        write(io, "$id $(block.duration) $(block.rf) $(block.gx) $(block.gy) $(block.gz) $(block.adc) $(block.ext)\n")
+        values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
+        for (i, (val, fmt)) in enumerate(zip(values, formats))
+            str = _format_value(val, fmt)
+            max_lengths[i] = max(max_lengths[i], length(str))
+        end
+    end
+    
+    for id in block_ids
+        block = assets.blocks[id]
+        values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
+        _format_row(io, values, max_lengths, formats)
     end
 end
 
 function emit_rf_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Format of RF events:\n")
     write(io, "# id amp mag_id phase_id time_id center delay freq_ppm phase_ppm freq_off phase_off use\n")
-    write(io, "# ..  Hz   ....   ......   .....     us    us      ppm   rad/MHz        Hz      rad  ..\n")
+    write(io, "# ..  Hz     ..       ..       ..    ..    us      ppm   rad/MHz       Hz       rad  ..\n")
     write(io, "# Field 'use' is the initial of:\n")
     write(io, "# excitation refocusing inversion saturation preparation other undefined\n")
     write(io, "[RF]\n")
-    for id in sort(collect(keys(assets.rf)))
-        @printf(io, "%d %.4f %d %d %d %.4f %d %.4f %.4f %.4f %.4f %c\n", id, assets.rf[id]...)
+    if isempty(assets.rf)
+        return
+    end
+    rf_ids = sort(collect(keys(assets.rf)))
+    formats = [:int, :float, :int, :int, :int, :float, :int, :float, :float, :float, :float, :char]
+    
+    # Calculate max lengths directly
+    max_lengths = zeros(Int, 12)
+    for id in rf_ids
+        rf_data = assets.rf[id]
+        values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
+        for (i, (val, fmt)) in enumerate(zip(values, formats))
+            str = _format_value(val, fmt)
+            max_lengths[i] = max(max_lengths[i], length(str))
+        end
+    end
+    
+    for id in rf_ids
+        rf_data = assets.rf[id]
+        values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
+        _format_row(io, values, max_lengths, formats)
     end
 end
 
 function emit_gradients_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Format of arbitrary gradient events:\n")
-    write(io, "# id   amp first  last shape_id time_id delay\n")
-    write(io, "# ..  Hz/m  Hz/m  Hz/m    .....   .....    us\n")
+    write(io, "# id      amp      first      last  shape_id  time_id  delay\n")
+    write(io, "# ..     Hz/m       Hz/m      Hz/m        ..       ..     us\n")
     write(io, "[GRADIENTS]\n")
-    for id in sort(collect(keys(assets.gradients)))
-        @printf(io, "%d %.4f %.4f %.4f %d %d %d\n", id, assets.gradients[id]...)
+    if isempty(assets.gradients)
+        return
+    end
+    grad_ids = sort(collect(keys(assets.gradients)))
+    formats = [:int, :float, :float, :float, :int, :int, :int]
+    
+    # Calculate max lengths directly - avoid creating array to preserve Int types
+    max_lengths = zeros(Int, 7)
+    for id in grad_ids
+        grad_data = assets.gradients[id]
+        vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
+        for (i, (val, fmt)) in enumerate(zip(vals, formats))
+            str = _format_value(val, fmt)
+            max_lengths[i] = max(max_lengths[i], length(str))
+        end
+    end
+    
+    for id in grad_ids
+        grad_data = assets.gradients[id]
+        vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
+        _format_row(io, vals, max_lengths, formats)
     end
 end
 
 function emit_trap_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Format of trapezoid gradient events:\n")
-    write(io, "# id   amp rise flat fall delay\n")
-    write(io, "# ..  Hz/m   us   us   us    us\n")
+    write(io, "# id      amp      rise  flat  fall  delay\n")
+    write(io, "# ..     Hz/m        us    us    us     us\n")
     write(io, "[TRAP]\n")
-    for id in sort(collect(keys(assets.trapezoids)))
-        @printf(io, "%d %.4f %d %d %d %d\n", id, assets.trapezoids[id]...)
+    if isempty(assets.trapezoids)
+        return
+    end
+    trap_ids = sort(collect(keys(assets.trapezoids)))
+    formats = [:int, :float, :int, :int, :int, :int]
+    
+    # Calculate max lengths directly - avoid creating array to preserve Int types
+    max_lengths = zeros(Int, 6)
+    for id in trap_ids
+        trap_data = assets.trapezoids[id]
+        vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
+        for (i, (val, fmt)) in enumerate(zip(vals, formats))
+            str = _format_value(val, fmt)
+            max_lengths[i] = max(max_lengths[i], length(str))
+        end
+    end
+    
+    for id in trap_ids
+        trap_data = assets.trapezoids[id]
+        vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
+        _format_row(io, vals, max_lengths, formats)
     end
 end
 
 function emit_adc_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Format of ADC events:\n")
-    write(io, "# id num dwell delay freq_ppm phase_ppm freq phase phase_id\n")
-    write(io, "# ..  ..    ns    us      ppm       ppm   Hz   rad    .....\n")
+    write(io, "# id  num  dwell  delay  freq_ppm  phase_ppm  freq  phase  phase_id\n")
+    write(io, "# ..   ..     ns     us       ppm        ppm    Hz    rad        ..\n")
     write(io, "[ADC]\n")
-    for id in sort(collect(keys(assets.adc)))
-        @printf(io, "%d %d %.4f %d %.4f %.4f %.4f %.4f %d\n", id, assets.adc[id]...)
+    if isempty(assets.adc)
+        return
+    end
+    adc_ids = sort(collect(keys(assets.adc)))
+    formats = [:int, :int, :float, :int, :float, :float, :float, :float, :int]
+    
+    # Calculate max lengths directly - avoid creating array to preserve Int types
+    max_lengths = zeros(Int, 9)
+    for id in adc_ids
+        adc_data = assets.adc[id]
+        vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
+        for (i, (val, fmt)) in enumerate(zip(vals, formats))
+            str = _format_value(val, fmt)
+            max_lengths[i] = max(max_lengths[i], length(str))
+        end
+    end
+    
+    for id in adc_ids
+        adc_data = assets.adc[id]
+        vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
+        _format_row(io, vals, max_lengths, formats)
     end
 end
 
@@ -1320,6 +1417,32 @@ function emit_signature_section!(io::IO, algorithm::AbstractString, hash_value::
     write(io, "Type $(algorithm)\n")
     write(io, "Hash $(hash_value)\n\n")
 end
+
+# Helper function to format a value as string based on format type
+function _format_value(val, fmt)
+    if fmt == :float
+        return @sprintf("%.4f", val)
+    else
+        return string(val)
+    end
+end
+
+# Helper function to format a table row with automatic column alignment (right-aligned)
+function _format_row(io, values, max_lengths, formats)
+    for (i, (val, max_len, fmt)) in enumerate(zip(values, max_lengths, formats))
+        str = _format_value(val, fmt)
+        # Right-align: add spaces before the value to pad to max_len
+        num_spaces = max(0, max_len - length(str))
+        write(io, repeat(" ", num_spaces))
+        write(io, str)
+        # Add spacing between columns (except after last column)
+        if i < length(values)
+            write(io, "   ")  # Base spacing between columns
+        end
+    end
+    write(io, "\n")
+end
+
 """
     write_seq(seq, filename)
 """
