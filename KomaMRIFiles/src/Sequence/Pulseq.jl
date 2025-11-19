@@ -1157,8 +1157,9 @@ function register_grad!(assets::PulseqExportAssets, A::Real, T, rise, fall, dela
 function register_adc!(assets::PulseqExportAssets, N, T, delay, Δf, ϕ, ctx::PulseqExportContext)
     iszero(N) && return 0
     num = N
-    dwell = (T / num) * 1e9 # from s to ns
-    delay = round(Int, delay * 1e6) # from s to us
+    dwell_s = num == 1 ? T : T / (num - 1)
+    dwell = dwell_s * 1e9 # from s to ns
+    delay = round(Int, (delay - dwell_s/2) * 1e6) # from s to us, subtract dwell/2 because read_ADC adds it back
     freq_ppm = 0.0
     phase_ppm = 0.0
     freq = Δf
