@@ -974,32 +974,6 @@ function verify_signature!(filename::String, signature::Union{Nothing,NamedTuple
     end
 end
 
-function extract_signature_payload(text::AbstractString; pulseq_version::VersionNumber=v"1.4.0")
-    sig_range = findfirst(r"\[SIGNATURE\]", text)
-    sig_range === nothing && return text, nothing
-    sig_start = first(sig_range)
-    separator_index = prevind(text, sig_start)
-    
-    # For Pulseq < 1.4.0 (e.g., JEMRIS), the newline before [SIGNATURE] is part of the payload
-    # For Pulseq >= 1.4.0, the newline before [SIGNATURE] is part of the signature and should be excluded
-    if pulseq_version < v"1.4.0"
-        # Include the newline before [SIGNATURE] in the payload (JEMRIS format)
-        payload = separator_index < firstindex(text) ? "" : text[firstindex(text):separator_index]
-    else
-        # Exclude the newline before [SIGNATURE] from the payload (spec-compliant)
-    payload = if separator_index < firstindex(text)
-        ""
-    elseif text[separator_index] in ['\n', '\r']
-        payload_end = prevind(text, separator_index)
-        payload_end < firstindex(text) ? "" : text[firstindex(text):payload_end]
-    else
-        text[firstindex(text):separator_index]
-        end
-    end
-    signature_section = text[sig_start:end]
-    payload, signature_section
-end
-
 # ----------------- Write Pulseq -----------------
 Base.@kwdef struct PulseqExportContext
     seq::Sequence
