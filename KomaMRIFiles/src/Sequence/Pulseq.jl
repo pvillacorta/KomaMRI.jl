@@ -1052,68 +1052,16 @@ function collect_pulseq_assets(ctx::PulseqExportContext)
     return assets
 end
 
-_ensure_samples(waveform::Vector{Float64}, n_samples::Int) = length(waveform) == n_samples ? waveform : (@warn "Waveform length $(length(waveform)) does not match expected samples $n_samples."; fill(waveform[1], n_samples))
-_ensure_samples(waveform::Float64, n_samples::Int) = fill(waveform, n_samples)
-
-function register_amp_shape!(
-    shapes::Dict{Int,Tuple{Int,Vector{Float64}}},
-    waveform,
-    n_samples::Int;
-    compress::Bool = true,
-)
-    samples = _ensure_samples(waveform, n_samples)
-    return _store_shape!(shapes, samples; compress=compress)
-end
-
-"""
-    id = register_time_shape!(shapes, waveform, rasterTime; compress = true)
-
-Register a time shape in the `shapes` dictionary.
-
-# Arguments
-- `shapes`: (`::Dict{Int,Tuple{Int,Vector{Float64}}}`) the shapes dictionary
-- `waveform`: (`::Vector{Float64}`) the waveform to register
-- `rasterTime`: (`::Float64`) the raster time
-
-# Keywords
-- `compress`: (`::Bool`, `=true`) whether to compress the waveform
-
-# Returns
-- `shape_id`: (`::Int`) the id of the shape in the `shapes` dictionary
-- `n_samples`: (`::Int`) the number of samples in the waveform
-"""
-function register_time_shape!(
-    shapes::Dict{Int,Tuple{Int,Vector{Float64}}},
-    waveform::Vector{Float64},
-    rasterTime::Float64;
-    compress::Bool = true,
-)
-    t_vector = cumsum(vcat(0.0, waveform ./ rasterTime))
-    return _store_shape!(shapes, t_vector; compress=compress), length(t_vector)
-end
-
-function register_time_shape!(
-    shapes::Dict{Int,Tuple{Int,Vector{Float64}}},
-    waveform::Real,
-    rasterTime::Float64;
-    compress::Bool = true
-)
-    n_samples = max(1, round(Int, waveform / rasterTime)) + 1
-    return 0, n_samples
-end
-
 """
     id = register_rf!(assets, A, T, Δf, delay, use, ctx)
 """
 function register_rf!(assets::PulseqExportAssets, A, T, Δf, delay, center, use, ctx::PulseqExportContext)
-    amp_aux = maximum(abs.(A))
-    iszero(amp_aux) && return 0
-    time_id, n_samples = register_time_shape!(assets.shapes, T, ctx.rfRasterTime; compress=true)
-    mag_id       = register_amp_shape!(assets.shapes, abs.(A) ./ amp_aux, n_samples; compress=true)
-    phase_id     = register_amp_shape!(assets.shapes, mod.(angle.(A) / (2π), 1.0), n_samples; compress=true)
-    amp          = γ * amp_aux # from T to Hz (nucleus-dependent)
+    iszero(maximum(abs.(A))) && return 0
+    Δt_rf = ctx.rfRasterTime
+    mag_id, phase_id, time_id = register_rf_shapes!(assets.shapes, A, T, Δt_rf; compress=true)
+    amp          = γ * maximum(abs.(A)) # from T to Hz (nucleus-dependent)
     center       = center * 1e6 # from s to us         # Would get_RF_center(RF(A, T, Δf, delay, center, use)) be enough?
-    delay        = round(Int, delay * 1e6) # from s to us
+    delay        = round(Int, (delay - (time_id==0) * Δt_rf/2) * 1e6) # from s to us
     freq_ppm     = 0.0
     phase_ppm    = 0.0
     freq_offset  = Δf
@@ -1121,21 +1069,45 @@ function register_rf!(assets::PulseqExportAssets, A, T, Δf, delay, center, use,
     use          = KomaMRIBase.get_char_from_RF_use(use)
     aux = (amp, mag_id, phase_id, time_id, center, delay, freq_ppm, phase_ppm, freq_offset, phase_offset, use)
     return _store_event!(assets.rf, aux)
-end 
+end
+
+# A and T are numbers (pulse waveform)
+function register_rf_shapes!(shapes, A, T, Δrf; compress = true)
+    n_samples = max(1, round(Int, T / Δrf)) + 1
+    mag_id    = _store_shape!(shapes, fill(1.0, n_samples); compress=compress)
+    phase_id  = _store_shape!(shapes, fill(mod(angle(A) / (2π), 1.0), n_samples); compress=compress)
+    time_id   = 0
+    return mag_id, phase_id, time_id
+end
+# A is a vector (uniformly-sampled waveform)
+function register_rf_shapes!(shapes, A::Vector, T, Δrf; compress = true)
+    n_samples = length(A)
+    mag_id    = _store_shape!(shapes, abs.(A) ./ maximum(abs.(A)); compress=compress)
+    phase_id  = _store_shape!(shapes, mod.(angle.(A) / (2π), 1.0); compress=compress)
+    t_vector  = collect(range(0, T, length=n_samples)) ./ Δrf
+    time_id   = _store_shape!(shapes, t_vector; compress=compress)
+    return mag_id, phase_id, time_id
+end
+# A and T are vectors (time-shaped waveform)
+function register_rf_shapes!(shapes, A::Vector, T::Vector, Δrf; compress = true)
+    mag_id    = _store_shape!(shapes, abs.(A) ./ maximum(abs.(A)); compress=compress)
+    phase_id  = _store_shape!(shapes, mod.(angle.(A) / (2π), 1.0); compress=compress)
+    t_vector = cumsum(vcat(0.0, T ./ Δrf))
+    time_id   = _store_shape!(shapes, t_vector; compress=compress)
+    return mag_id, phase_id, time_id
+end
 
 """
     id = register_grad!(assets, A, T, rise, fall, delay, first, last, ctx)
 """
 # Arbitrary gradient waveform (into [GRADIENTS] section)
 function register_grad!(assets::PulseqExportAssets, A::Vector, T, rise, fall, delay, first, last, ctx::PulseqExportContext)
-    amp_aux = maximum(abs.(A))
-    iszero(amp_aux) && return 0
-    time_id, ns = register_time_shape!(assets.shapes, T, ctx.gradientRasterTime; compress=true)
-    shape_id    = register_amp_shape!(assets.shapes, A ./ amp_aux, ns; compress=true)
-    amp         = γ * amp_aux # from T/m to Hz/m (nucleus-dependent)
-    delay       = round(Int, delay * 1e6) # from s to us
-    first       = γ * first # from T/m to Hz/m 
-    last        = γ * last  # from T/m to Hz/m
+    iszero(maximum(abs.(A))) && return 0
+    shape_id, time_id = register_grad_shapes!(assets.shapes, A, T, rise, fall,ctx.gradientRasterTime; compress=true)
+    amp   = γ * maximum(abs.(A)) # from T/m to Hz/m (nucleus-dependent)
+    delay = round(Int, delay * 1e6) # from s to us
+    first = γ * first # from T/m to Hz/m 
+    last  = γ * last  # from T/m to Hz/m
     aux = (amp, first, last, shape_id, time_id, delay)
     return _store_event!(assets.gradients, aux)
 end
@@ -1149,7 +1121,23 @@ function register_grad!(assets::PulseqExportAssets, A::Real, T, rise, fall, dela
     delay = round(Int, delay * 1e6) # from s to us
     aux = (amp, rise, flat, fall, delay)
     return _store_event!(assets.trapezoids, aux)
- end 
+end 
+
+# A is a vector (uniformly-sampled waveform)
+function register_grad_shapes!(shapes, A::Vector, T, rise, fall, Δgr; compress = true)
+    n_samples = length(A)
+    shape_id  = _store_shape!(shapes, [0; A ./ maximum(abs.(A)); 0]; compress=compress)
+    t_vector  = [0; collect(range(rise, T + rise, length=n_samples)); T + rise + fall] ./ Δgr
+    time_id   = _store_shape!(shapes, t_vector; compress=compress)
+    return shape_id, time_id
+end
+# A and T are vectors (time-shaped waveform)
+function register_grad_shapes!(shapes, A::Vector, T::Vector, rise, fall, Δgr; compress = true)
+    shape_id = _store_shape!(shapes, [0; A ./ maximum(abs.(A)); 0]; compress=compress)
+    t_vector = cumsum([0; rise; T; fall]) ./ Δgr
+    time_id  = _store_shape!(shapes, t_vector; compress=compress)
+    return shape_id, time_id
+end
 
  """
         id = register_adc!(assets, N, T, delay, Δf, ϕ, ctx)
@@ -1256,15 +1244,13 @@ function emit_blocks_section!(io::IO, assets::PulseqExportAssets)
         return
     end
     block_ids = sort(collect(keys(assets.blocks)))
-    formats = [:int, :int, :int, :int, :int, :int, :int, :int]
     
-    # Calculate max lengths directly
     max_lengths = [0, 0, 0, 0, 0, 0, 0, 0]
     for id in block_ids
         block = assets.blocks[id]
         values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
-        for (i, (val, fmt)) in enumerate(zip(values, formats))
-            str = _format_value(val, fmt)
+        for (i, val) in enumerate(values)
+            str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
     end
@@ -1272,7 +1258,7 @@ function emit_blocks_section!(io::IO, assets::PulseqExportAssets)
     for id in block_ids
         block = assets.blocks[id]
         values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
-        _format_row(io, values, max_lengths, formats)
+        _format_row(io, values, max_lengths)
     end
 end
 
@@ -1287,15 +1273,13 @@ function emit_rf_section!(io::IO, assets::PulseqExportAssets)
         return
     end
     rf_ids = sort(collect(keys(assets.rf)))
-    formats = [:int, :float, :int, :int, :int, :float, :int, :float, :float, :float, :float, :char]
     
-    # Calculate max lengths directly
     max_lengths = zeros(Int, 12)
     for id in rf_ids
         rf_data = assets.rf[id]
         values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
-        for (i, (val, fmt)) in enumerate(zip(values, formats))
-            str = _format_value(val, fmt)
+        for (i, val) in enumerate(values)
+            str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
     end
@@ -1303,7 +1287,7 @@ function emit_rf_section!(io::IO, assets::PulseqExportAssets)
     for id in rf_ids
         rf_data = assets.rf[id]
         values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
-        _format_row(io, values, max_lengths, formats)
+        _format_row(io, values, max_lengths)
     end
 end
 
@@ -1316,15 +1300,13 @@ function emit_gradients_section!(io::IO, assets::PulseqExportAssets)
         return
     end
     grad_ids = sort(collect(keys(assets.gradients)))
-    formats = [:int, :float, :float, :float, :int, :int, :int]
     
-    # Calculate max lengths directly - avoid creating array to preserve Int types
     max_lengths = zeros(Int, 7)
     for id in grad_ids
         grad_data = assets.gradients[id]
         vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
-        for (i, (val, fmt)) in enumerate(zip(vals, formats))
-            str = _format_value(val, fmt)
+        for (i, val) in enumerate(vals)
+            str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
     end
@@ -1332,7 +1314,7 @@ function emit_gradients_section!(io::IO, assets::PulseqExportAssets)
     for id in grad_ids
         grad_data = assets.gradients[id]
         vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
-        _format_row(io, vals, max_lengths, formats)
+        _format_row(io, vals, max_lengths)
     end
 end
 
@@ -1345,15 +1327,14 @@ function emit_trap_section!(io::IO, assets::PulseqExportAssets)
         return
     end
     trap_ids = sort(collect(keys(assets.trapezoids)))
-    formats = [:int, :float, :int, :int, :int, :int]
     
     # Calculate max lengths directly - avoid creating array to preserve Int types
     max_lengths = zeros(Int, 6)
     for id in trap_ids
         trap_data = assets.trapezoids[id]
         vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
-        for (i, (val, fmt)) in enumerate(zip(vals, formats))
-            str = _format_value(val, fmt)
+        for (i, val) in enumerate(vals)
+            str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
     end
@@ -1361,7 +1342,7 @@ function emit_trap_section!(io::IO, assets::PulseqExportAssets)
     for id in trap_ids
         trap_data = assets.trapezoids[id]
         vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
-        _format_row(io, vals, max_lengths, formats)
+        _format_row(io, vals, max_lengths)
     end
 end
 
@@ -1374,15 +1355,13 @@ function emit_adc_section!(io::IO, assets::PulseqExportAssets)
         return
     end
     adc_ids = sort(collect(keys(assets.adc)))
-    formats = [:int, :int, :float, :int, :float, :float, :float, :float, :int]
     
-    # Calculate max lengths directly - avoid creating array to preserve Int types
     max_lengths = zeros(Int, 9)
     for id in adc_ids
         adc_data = assets.adc[id]
         vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
-        for (i, (val, fmt)) in enumerate(zip(vals, formats))
-            str = _format_value(val, fmt)
+        for (i, val) in enumerate(vals)
+            str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
     end
@@ -1390,7 +1369,7 @@ function emit_adc_section!(io::IO, assets::PulseqExportAssets)
     for id in adc_ids
         adc_data = assets.adc[id]
         vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
-        _format_row(io, vals, max_lengths, formats)
+        _format_row(io, vals, max_lengths)
     end
 end
 
@@ -1420,18 +1399,12 @@ function emit_signature_section!(io::IO, algorithm::AbstractString, hash_value::
 end
 
 # Helper function to format a value as string based on format type
-function _format_value(val, fmt)
-    if fmt == :float
-        return @sprintf("%.4f", val)
-    else
-        return string(val)
-    end
-end
+_format_value(val) = val isa Float64 ? @sprintf("%.4f", val) : string(val)
 
 # Helper function to format a table row with automatic column alignment (right-aligned)
-function _format_row(io, values, max_lengths, formats)
-    for (i, (val, max_len, fmt)) in enumerate(zip(values, max_lengths, formats))
-        str = _format_value(val, fmt)
+function _format_row(io, values, max_lengths)
+    for (i, (val, max_len)) in enumerate(zip(values, max_lengths))
+        str = _format_value(val)
         # Right-align: add spaces before the value to pad to max_len
         num_spaces = max(0, max_len - length(str))
         write(io, repeat(" ", num_spaces))
