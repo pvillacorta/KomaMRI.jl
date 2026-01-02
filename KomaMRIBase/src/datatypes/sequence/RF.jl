@@ -33,10 +33,12 @@ The RF struct represents a Radio Frequency excitation of a sequence event.
 # Arguments
 - `A`: (`::Complex`, `[T]`) RF complex amplitud modulation (AM), ``B_1(t) = |B_1(t)|
     e^{i\\phi(t)} = B_{1}(t) + iB_{1,y}(t) ``
-- `T`: (`::Real`, [`s`]) RF duration
-- `Δf`: (`::Real` or `::Vector`, [`Hz`]) RF frequency difference with respect to the Larmor frequency.
+- `T`: (`::Real`, `[s]`) RF duration
+- `Δf`: (`::Real` or `::Vector`, `[Hz]`) RF frequency difference with respect to the Larmor frequency.
     This can be a number but also a vector to represent frequency modulated signals (FM).
-- `delay`: (`::Real`, [`s`]) RF delay time
+- `delay`: (`::Real`, `[s]`) RF delay time
+- `center`: (`::Real`, `[s]`) RF center time
+- `use`: (`::RFUse`) RF use type
 
 # Returns
 - `rf`: (`::RF`) the RF struct
@@ -52,14 +54,20 @@ mutable struct RF
     A
     T
     Δf
-    delay::Real
-    center
+    delay::Float64
+    center::Float64
     use::RFUse
     RF(A, T, Δf, delay, center, use) = any(T .< 0) || delay < 0 ? error("RF timings must be non-negative.") : new(A, T, Δf, delay, center, use)
     RF(A, T, Δf, delay, center)      = RF(A, T, Δf,  delay, center, Undefined())
-    RF(A, T, Δf, delay)              = RF(A, T, Δf,  delay, 0.0,    Undefined())
-    RF(A, T, Δf)                     = RF(A, T, Δf,  0.0,   0.0,    Undefined())
-    RF(A, T)                         = RF(A, T, 0.0, 0.0,   0.0,    Undefined())
+    RF(A, T, Δf, delay)              = _RF_with_center(A, T, Δf,  delay, Undefined())
+    RF(A, T, Δf)                     = _RF_with_center(A, T, Δf,  0.0,   Undefined())
+    RF(A, T)                         = _RF_with_center(A, T, 0.0, 0.0,   Undefined())
+end
+
+function _RF_with_center(A, T, Δf, delay, use)
+    rf = RF(A, T, Δf, delay, 0.0, use)
+    rf.center = get_RF_center(rf)
+    return rf
 end
 
 """
@@ -187,16 +195,16 @@ end
 """
     t = get_RF_center(x::RF)
 
-Calculates the time where is the center of the RF pulse `x`. This calculation includes the
-RF delay.
+Calculates the time where is the center of the RF pulse `x` .
+It includes the RF delay and uses the weighted average of times by amplitude.
 
 # Arguments
 - `x`: (`::RF`) RF struct
 
 # Returns
-- `t`: (`::Int64`, `[s]`) time where is the center of the RF pulse `x`
+- `t`: (`::Real`, `[s]`) time where is the center of the RF pulse `x`
 """
-get_RF_center(x::RF) = begin
+function get_RF_center(x::RF)
     t = times(x)
     B1 = ampls(x)
     t_center = sum(abs.(B1) .* t) ./ sum(abs.(B1))

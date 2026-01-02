@@ -87,6 +87,7 @@ using TestItems, TestItemRunner, KomaMRIBase
         obj1 = brain_phantom2D()
         obj1.motion = MotionList(
             rotate(0.0, 0.0, 45.0, Periodic(period=1.0)),
+            rotate(0.0, 0.0, 45.0, TimeRange(t_start=0.0, t_end=0.5), SpinRange(1:100); center=(0.0, 0.0, 1.0)),
             translate(0.0, 0.02, 0.0, TimeRange(t_start=0.0, t_end=0.5))
         )
         write_phantom(obj1, filename)
@@ -102,7 +103,10 @@ using TestItems, TestItemRunner, KomaMRIBase
         K = 10
         t_start = 0.0
         t_end = 1.0
-        obj1.motion = path(0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), TimeRange(t_start, t_end)) 
+        obj1.motion = MotionList(
+            path(    0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1),                      TimeRange(t_start, t_end)),
+            flowpath(0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), rand(Bool, Ns, K-1), TimeRange(t_start, t_end))
+        )
         write_phantom(obj1, filename)
         obj2 = read_phantom(filename)
         @test obj1 == obj2
@@ -119,21 +123,24 @@ end
     not_empty = ((ek, ep),) -> !isempty(ep.t)
 
     # Reading files
-    pth          = joinpath(@__DIR__, "test_files/pulseq/pulseq_read_comparison")
-    pulseq_files = filter(endswith(".seq"), readdir(pth)) .|> x -> splitext(x)[1]
-    for pulseq_file in pulseq_files
-        #@show pulseq_file
-        seq_koma   = @suppress read_seq("$pth/$pulseq_file.seq")
-        seq_pulseq = matread("$pth/$pulseq_file.mat")["sequence"] .|> namedtuple
-        @testset "$pulseq_file" begin
-            for i in 1:length(seq_koma)
-                blk_koma   = get_samples(seq_koma, i)
-                blk_pulseq = NamedTuple{keys(blk_koma)}(seq_pulseq[i]) # Reorder keys
-                for (ev_koma, ev_pulseq) in Iterators.filter(not_empty, zip(blk_koma, blk_pulseq))
-                    @test ev_koma.t ≈ ev_pulseq.t
-                    @test inside(ev_koma.A) ≈ inside(ev_pulseq.A)
-                    @test first(ev_koma.A)  ≈ first(ev_pulseq.A) || ev_koma.t[2] ≈ ev_koma.t[1]
-                    @test last(ev_koma.A)   ≈ last(ev_pulseq.A)
+    pth          = joinpath(@__DIR__, "test_files/pulseq/pulseq_read_comparison/")
+    versions     = ["v1.4", "v1.5"]
+    for v in versions
+        pulseq_files = filter(endswith(".seq"), readdir(pth*v)) .|> x -> splitext(x)[1]
+        for pulseq_file in pulseq_files
+            #@show pulseq_file
+            seq_koma   = @suppress read_seq("$pth$v/$pulseq_file.seq")
+            seq_pulseq = matread("$pth$v/$pulseq_file.mat")["sequence"] .|> namedtuple
+            @testset "$v/$pulseq_file" begin
+                for i in 1:length(seq_koma)
+                    blk_koma   = get_samples(seq_koma, i)
+                    blk_pulseq = NamedTuple{keys(blk_koma)}(seq_pulseq[i]) # Reorder keys
+                    for (ev_koma, ev_pulseq) in Iterators.filter(not_empty, zip(blk_koma, blk_pulseq))
+                        @test ev_koma.t ≈ ev_pulseq.t
+                        @test inside(ev_koma.A) ≈ inside(ev_pulseq.A)
+                        @test first(ev_koma.A)  ≈ first(ev_pulseq.A) || ev_koma.t[2] ≈ ev_koma.t[1]
+                        @test last(ev_koma.A)   ≈ last(ev_pulseq.A)
+                    end
                 end
             end
         end
