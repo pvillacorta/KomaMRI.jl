@@ -128,7 +128,7 @@ getproperty(x::Matrix{RF}, f::Symbol) = begin
 end
 
 # RF comparison
-Base.:(≈)(rf1::RF, rf2::RF) = reduce(&, [getfield(rf1, field) ≈ getfield(rf2, field) for field in fieldnames(RF)])
+Base.:(≈)(rf1::RF, rf2::RF) = all([typeof(getfield(rf1, k)) == typeof(getfield(rf2, k)) ? getfield(rf1, k) ≈ getfield(rf2, k) : false for k in fieldnames(RF)])
 Base.:(≈)(u1::RFUse, u2::RFUse) = u1 == u2
     
 # Properties

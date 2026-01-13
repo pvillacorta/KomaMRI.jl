@@ -2,11 +2,66 @@ using TestItems, TestItemRunner, KomaMRIBase
 
 @run_package_tests filter=t_start->!(:skipci in t_start.tags)&&(:files in t_start.tags) #verbose=true
 
-@testitem "Files" tags=[:files] begin
-    using Suppressor, KomaMRIBase
+@testitem "JEMRIS" tags=[:files] begin
+    using KomaMRIBase
+    pth = @__DIR__
+    obj = read_phantom_jemris(pth*"/test_files/phantom/column1d.h5")
+    @test obj.name == "column1d.h5"
+end
 
-    # Test Pulseq
-    @testset "Pulseq" begin
+@testitem "MRiLab" tags=[:files] begin
+    using KomaMRIBase
+    pth = @__DIR__
+    filename = pth * "/test_files/phantom/brain_mrilab.mat"
+    FRange_filename = pth * "/test_files/phantom/FRange.mat" #Slab within slice thickness
+    obj = read_phantom_MRiLab(filename; FRange_filename)
+    @test obj.name == "brain_mrilab.mat"
+end
+
+@testitem "Phantom" tags=[:files] begin
+    using KomaMRIBase
+    @testset "NoMotion" begin
+        pth = @__DIR__
+        filename = pth * "/test_files/phantom/brain_nomotion_w.phantom"
+        obj1 = brain_phantom2D()
+        write_phantom(obj1, filename)
+        obj2 = read_phantom(filename)
+        @test obj1 == obj2
+    end
+    @testset "SimpleAction" begin
+        pth = @__DIR__
+        filename = pth * "/test_files/phantom/brain_simplemotion_w.phantom"
+        obj1 = brain_phantom2D()
+        obj1.motion = MotionList(
+            rotate(0.0, 0.0, 45.0, Periodic(period=1.0)),
+            rotate(0.0, 0.0, 45.0, TimeRange(t_start=0.0, t_end=0.5), SpinRange(1:100); center=(0.0, 0.0, 1.0)),
+            translate(0.0, 0.02, 0.0, TimeRange(t_start=0.0, t_end=0.5))
+        )
+        write_phantom(obj1, filename)
+        obj2 = read_phantom(filename)
+        @test obj1 == obj2
+    end
+    @testset "ArbitraryAction" begin
+        pth = @__DIR__
+        filename = pth * "/test_files/phantom/brain_arbitrarymotion_w.phantom"
+        obj1 = brain_phantom2D()
+        Ns = length(obj1)
+        K = 10
+        t_start = 0.0
+        t_end = 1.0
+        obj1.motion = MotionList(
+            path(    0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1),                      TimeRange(t_start, t_end)),
+            flowpath(0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), rand(Bool, Ns, K-1), TimeRange(t_start, t_end))
+        )
+        write_phantom(obj1, filename)
+        obj2 = read_phantom(filename)
+        @test obj1 == obj2
+    end
+end
+
+@testitem "Pulseq" tags=[:files, :pulseq] begin
+    using MAT, KomaMRIBase, Suppressor
+    @testset "Simple Tests" begin
         pth = @__DIR__
         seq = @suppress read_seq(pth*"/test_files/pulseq/v1.5/gre_rad.seq") #Pulseq v1.5.1
         @test seq.DEF["FileName"] == "gre_rad.seq"
@@ -32,16 +87,15 @@ using TestItems, TestItemRunner, KomaMRIBase
         @test seq.DEF["FileName"] == "radial_JEMRIS.seq"
         @test seq.DEF["PulseqVersion"] == v"1.2.1"
         @test seq.DEF["signature"][:hash] == "e827cfff4436b65a6341a4fa0f6deb07"
-
-        # Test Pulseq compression-decompression
+    end
+    @testset "Compression-Decompression" begin
         shape = ones(100)
         num_samples, compressed_data = KomaMRIFiles.compress_shape(shape)
         shape2 = KomaMRIFiles.decompress_shape(num_samples, compressed_data)
         @test shape == shape2
-
-        # Test label capability
-        using KomaMRIBase
-        
+    end
+    @testset "Label Tests" begin
+        pth = @__DIR__
         seq = @suppress read_seq(pth*"/test_files/pulseq/v1.4/label_test.seq") 
         label = get_label(seq)
         m = maximum(label)
@@ -55,94 +109,44 @@ using TestItems, TestItemRunner, KomaMRIBase
         end
         @test bool
     end
-    # Test JEMRIS
-    @testset "JEMRIS" begin
-        pth = @__DIR__
-        obj = read_phantom_jemris(pth*"/test_files/phantom/column1d.h5")
-        @test obj.name == "column1d.h5"
-    end
-    # Test MRiLab
-    @testset "MRiLab" begin
-        pth = @__DIR__
-        filename = pth * "/test_files/phantom/brain_mrilab.mat"
-        FRange_filename = pth * "/test_files/phantom/FRange.mat" #Slab within slice thickness
-        obj = read_phantom_MRiLab(filename; FRange_filename)
-        @test obj.name == "brain_mrilab.mat"
-    end
-    # Test Phantom (.phantom)
-    @testset "Phantom" begin
-        using KomaMRIBase
-        pth = @__DIR__
-        # NoMotion
-        filename = pth * "/test_files/phantom/brain_nomotion_w.phantom"
-        obj1 = brain_phantom2D()
-        write_phantom(obj1, filename)
-        obj2 = read_phantom(filename)
-        @test obj1 == obj2
-    end
-    @testset "SimpleAction" begin
-        # SimpleAction
-        pth = @__DIR__
-        filename = pth * "/test_files/phantom/brain_simplemotion_w.phantom"
-        obj1 = brain_phantom2D()
-        obj1.motion = MotionList(
-            rotate(0.0, 0.0, 45.0, Periodic(period=1.0)),
-            rotate(0.0, 0.0, 45.0, TimeRange(t_start=0.0, t_end=0.5), SpinRange(1:100); center=(0.0, 0.0, 1.0)),
-            translate(0.0, 0.02, 0.0, TimeRange(t_start=0.0, t_end=0.5))
-        )
-        write_phantom(obj1, filename)
-        obj2 = read_phantom(filename)
-        @test obj1 == obj2
-    end
-    @testset "ArbitraryAction" begin
-        # ArbitraryAction
-        pth = @__DIR__
-        filename = pth * "/test_files/phantom/brain_arbitrarymotion_w.phantom"
-        obj1 = brain_phantom2D()
-        Ns = length(obj1)
-        K = 10
-        t_start = 0.0
-        t_end = 1.0
-        obj1.motion = MotionList(
-            path(    0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1),                      TimeRange(t_start, t_end)),
-            flowpath(0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), 0.01.*rand(Ns, K-1), rand(Bool, Ns, K-1), TimeRange(t_start, t_end))
-        )
-        write_phantom(obj1, filename)
-        obj2 = read_phantom(filename)
-        @test obj1 == obj2
-    end
-end
-
-@testitem "Pulseq compat" tags=[:files, :pulseq] begin
-    using MAT, KomaMRIBase, Suppressor
-
-    # Aux functions
-    inside(x) = x[2:end-1]
-    namedtuple(x) = x[:]
-    namedtuple(d::Dict) = (; (Symbol(k == "df" ? "Δf" : k) => namedtuple(v) for (k,v) in d)...)
-    not_empty = ((ek, ep),) -> !isempty(ep.t)
-
-    # Reading files
-    pth          = joinpath(@__DIR__, "test_files/pulseq/pulseq_read_comparison/")
-    versions     = ["v1.4", "v1.5"]
-    for v in versions
-        pulseq_files = filter(endswith(".seq"), readdir(pth*v)) .|> x -> splitext(x)[1]
-        for pulseq_file in pulseq_files
-            #@show pulseq_file
-            seq_koma   = @suppress read_seq("$pth$v/$pulseq_file.seq")
-            seq_pulseq = matread("$pth$v/$pulseq_file.mat")["sequence"] .|> namedtuple
-            @testset "$v/$pulseq_file" begin
-                for i in 1:length(seq_koma)
-                    blk_koma   = get_samples(seq_koma, i)
-                    blk_pulseq = NamedTuple{keys(blk_koma)}(seq_pulseq[i]) # Reorder keys
-                    for (ev_koma, ev_pulseq) in Iterators.filter(not_empty, zip(blk_koma, blk_pulseq))
-                        @test ev_koma.t ≈ ev_pulseq.t
-                        @test inside(ev_koma.A) ≈ inside(ev_pulseq.A)
-                        @test first(ev_koma.A)  ≈ first(ev_pulseq.A) || ev_koma.t[2] ≈ ev_koma.t[1]
-                        @test last(ev_koma.A)   ≈ last(ev_pulseq.A)
+    @testset "Read Comparison" begin
+        inside(x) = x[2:end-1]
+        namedtuple(x) = x[:]
+        namedtuple(d::Dict) = (; (Symbol(k == "df" ? "Δf" : k) => namedtuple(v) for (k,v) in d)...)
+        not_empty = ((ek, ep),) -> !isempty(ep.t)
+        # Reading files
+        pth          = joinpath(@__DIR__, "test_files/pulseq/pulseq_read_comparison/")
+        versions     = ["v1.4", "v1.5"]
+        for v in versions
+            pulseq_files = filter(endswith(".seq"), readdir(pth*v)) .|> x -> splitext(x)[1]
+            for pulseq_file in pulseq_files
+                #@show pulseq_file
+                seq_koma   = @suppress read_seq("$pth$v/$pulseq_file.seq")
+                seq_pulseq = matread("$pth$v/$pulseq_file.mat")["sequence"] .|> namedtuple
+                @testset "$v/$pulseq_file" begin
+                    for i in 1:length(seq_koma)
+                        blk_koma   = get_samples(seq_koma, i)
+                        blk_pulseq = NamedTuple{keys(blk_koma)}(seq_pulseq[i]) # Reorder keys
+                        for (ev_koma, ev_pulseq) in Iterators.filter(not_empty, zip(blk_koma, blk_pulseq))
+                            @test ev_koma.t ≈ ev_pulseq.t
+                            @test inside(ev_koma.A) ≈ inside(ev_pulseq.A)
+                            @test first(ev_koma.A)  ≈ first(ev_pulseq.A) || ev_koma.t[2] ≈ ev_koma.t[1]
+                            @test last(ev_koma.A)   ≈ last(ev_pulseq.A)
+                        end
                     end
                 end
             end
         end
+    end
+    @testset "Round-trip Test" begin
+        include("utils.jl")
+        pth = @__DIR__
+        # EPI sequence
+        filename = pth * "/test_files/pulseq/round_trip_tests/epi_example.seq"
+        seq1 = PulseDesigner.EPI_example()
+        qseq = quantize_seq_times(seq1)
+        @suppress write_seq(seq1, filename)
+        seq2 = @suppress read_seq(filename)
+        @test seq2 ≈ qseq
     end
 end

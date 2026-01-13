@@ -228,7 +228,6 @@ function compress_shape(w; forceCompression=false)
         v = [vals'; vals2'; nExtra']
         v = convert(Vector{Float64}, v[isfinite.(v)])
         v[abs.(v) .<= 1e-10] .= 0
-
         # decide whether compression makes sense, otherwise store the original
         if forceCompression || num_samples > length(v)
             data = v
@@ -333,6 +332,22 @@ function fix_first_last_grads!(seq::Sequence)
             end
         end
     end
+end
+
+"""
+    amp_shape, time_shape = simplify_waveforms(amp_shape, time_shape)
+
+Simplifies the amplitude and time waveforms to a single value if they are constant.
+"""
+function simplify_waveforms(amp_shape, time_shape)
+    if all(x->x==amp_shape[1], amp_shape)
+        amp_shape = amp_shape[1]
+        time_shape = sum(time_shape)
+    elseif all(x->x==time_shape[1], time_shape)
+        amp_shape = amp_shape
+        time_shape = sum(time_shape)
+    end
+    return amp_shape, time_shape
 end
 
 """
@@ -536,16 +551,18 @@ function get_Grad(gradLibrary, shapeLibrary, Δt_gr, i)
         #Creating timings
         if time_shape_id == 0 #no time waveform. Default time raster
             gT = Ngr * Δt_gr
-            G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first_grads, last_grads)
+            rise, fall = Δt_gr/2, Δt_gr/2
         elseif time_shape_id == -1 #New in pulseq 1.5.x: no time waveform. 1/2 of the default time raster
             gT = Ngr * Δt_gr / 2
-            G = Grad(gA, gT, Δt_gr/2, Δt_gr/2, delay, first_grads, last_grads)
+            rise, fall = Δt_gr/2, Δt_gr/2
         else
             gt = decompress_shape(shapeLibrary[time_shape_id]...)
             delay += gt[1] * Δt_gr # offset due to the shape starting at a non-zero value
             gT = diff(gt) * Δt_gr
-            G = Grad(gA,gT,0.0,0.0,delay,first_grads,last_grads)
+            rise, fall = 0.0, 0.0
         end
+        gA, gT = simplify_waveforms(gA, gT)
+        G = Grad(gA, gT, rise, fall, delay, first_grads, last_grads)
     end
     return G
 end
@@ -584,7 +601,6 @@ function get_RF(rfLibrary, shapeLibrary, Δt_rf, i)
     freq          =  v1_5 ? r[9] : r[6]
     phase         =  v1_5 ? r[10] : r[7]
     use           =  v1_5 ? r[11] : 'u'
-
     #Amplitude and phase waveforms
     if amplitude != 0 && mag_id != 0
         rfA = decompress_shape(shapeLibrary[mag_id]...)
@@ -605,6 +621,7 @@ function get_RF(rfLibrary, shapeLibrary, Δt_rf, i)
         delay += rft[1] * Δt_rf # offset due to the shape starting at a non-zero value
         rfT = diff(rft) * Δt_rf
     end
+    rfAϕ, rfT = simplify_waveforms(rfAϕ, rfT)
     use = KomaMRIBase.get_RF_use_from_char(Val(use))
     if v1_5 # for version 1.5.x
         return [RF(rfAϕ,rfT,freq,delay,center,use);;]
@@ -626,11 +643,9 @@ Reads the ADC. It is used internally by [`get_block`](@ref).
 - `adc`: (`1x1 ::Vector{ADC}`) ADC struct
 """
 function get_ADC(adcLibrary, i)
-
     if isempty(adcLibrary) || i==0
         return [ADC(0, 0)]
     end
-
     #Unpacking
     a = adcLibrary[i]["data"]
     v1_5 = length(a) == 8
@@ -683,7 +698,14 @@ function get_block(obj, i, blockDurationRaster, pulseq_version)
     if pulseq_version >= v"1.4.0" # Explicit block duration (in units of blockDurationRaster)
         duration = idur * blockDurationRaster
         max_dur = max(dur(Gx), dur(Gy), dur(Gz), dur(R[1]), dur(A[1]))
-        @assert duration ≈ max_dur || duration >= max_dur "Block duration must be greater than or approximately equal to the duration of the block events"
+        if !(duration ≈ max_dur || duration >= max_dur)
+            @error "No event comprising a sequence block is allowed to last longer than the specified block duration.
+            $max_dur > $duration
+            Block: $i
+            Maximum duration: $max_dur
+            Block duration: $duration
+            Implemented since Pulseq v1.4.0 See https://pulseq.github.io/specification.pdf#subsection.2.7"
+        end
         D = Float64[duration]
     else # Block duration as the sum of the delay and the duration of the block events
         idelay = idur > 0 ? obj["tmp_delayLibrary"][idur]["data"][1] : 0.0
@@ -904,7 +926,9 @@ Base.@kwdef struct PulseqExportAssets
     trapezoids::Dict{Int,Tuple{Float64,Int,Int,Int,Int}} = Dict{Int,Tuple{Float64,Int,Int,Int,Int}}()
     adc::Dict{Int,Tuple{Int,Float64,Int,Float64,Float64,Float64,Float64,Int}} = Dict{Int,Tuple{Int,Float64,Int,Float64,Float64,Float64,Float64,Int}}()
     shapes::Dict{Int,Tuple{Int,Vector{Float64}}} = Dict{Int,Tuple{Int,Vector{Float64}}}() # shapes are stored compressed if selected
-    extensions::Dict{Int,Tuple{Int,Int,Int}} = Dict{Int,Tuple{Int,Int,Int}}()
+    extensionInstances::Dict{Int,Tuple{Int,Int,Int}} = Dict{Int,Tuple{Int,Int,Int}}()
+    extensionTypes::Dict{Int,Type{<:Extension}} = Dict{Int,Type{<:Extension}}()
+    extensionSpecs::Dict{Int,Dict{Int,Extension}} = Dict{Int,Dict{Int,Extension}}()
 end
 
 """
@@ -917,26 +941,66 @@ and for translating each sequence block into the integer lookups (i.e., the asse
 function collect_pulseq_assets(ctx::PulseqExportContext)
     assets = PulseqExportAssets()
     seq = ctx.seq
+    
+    # First pass: Collect all unique extension vectors and register them once
+    # This ensures that blocks sharing the same extensions reuse the same instance IDs
+    # We use parallel arrays to track extension vectors and their IDs (since vectors can't be dict keys)
+    extension_vectors = Vector{Extension}[]
+    extension_vector_ids = Int[]
+    
     for (idx, block) in enumerate(seq)
-        # 1. Round block duration to the raster
-        duration = round(Int, dur(block) / ctx.blockDurationRaster)
-
-        # 2. RF: deduplicate waveform in `assets.rf` and store the ID
+        ext_vec = block.EXT[1]
+        if length(ext_vec) > 0
+            # Check if this extension vector has already been registered by comparing content
+            matching_idx = findfirst(registered_ext -> 
+                length(registered_ext) == length(ext_vec) && 
+                all(e1 ≈ e2 for (e1, e2) in zip(registered_ext, ext_vec)),
+                extension_vectors
+            )
+            if matching_idx === nothing
+                # Register this extension vector
+                ext_id = register_ext!(assets, ext_vec, ctx)
+                push!(extension_vectors, ext_vec)
+                push!(extension_vector_ids, ext_id)
+            end
+        end
+    end
+    
+    # Second pass: Process all blocks and use pre-registered extension IDs
+    for (idx, block) in enumerate(seq)
+        # 1. RF: deduplicate waveform in `assets.rf` and store the ID
         rf = block.RF[1]
         rf_id = register_rf!(assets, rf.A, rf.T, rf.Δf, rf.delay, rf.center,rf.use, ctx)
 
-        # 3. Gradients: do the same per axis, store ids `gx`, `gy`, `gz`
+        # 2. Gradients: do the same per axis, store ids `gx`, `gy`, `gz`
         gx, gy, gz = block.GR
         gx_id = register_grad!(assets, gx.A, gx.T, gx.rise, gx.fall, gx.delay, gx.first, gx.last, ctx)
         gy_id = register_grad!(assets, gy.A, gy.T, gy.rise, gy.fall, gy.delay, gy.first, gy.last, ctx)
         gz_id = register_grad!(assets, gz.A, gz.T, gz.rise, gz.fall, gz.delay, gz.first, gz.last, ctx)
 
-        # 4. ADC: deduplicate and store the ID
+        # 3. ADC: deduplicate and store the ID
         adc = block.ADC[1]
         adc_id = register_adc!(assets, adc.N, adc.T, adc.delay, adc.Δf, adc.ϕ, ctx)
 
-        # 5. Extensions (if any)
-        ext_id = register_ext!(assets, block.EXT, ctx)
+        # 4. Calculate block duration: must be >= max duration of all events
+        # After quantization, event durations may have changed, so we need to recalculate
+        max_event_duration = max(dur(gx), dur(gy), dur(gz), dur(rf), dur(adc))
+        block_duration = max(dur(block), max_event_duration)
+        # Round to block duration raster (round up to ensure >= max_event_duration)
+        duration = ceil(Int, block_duration / ctx.blockDurationRaster)
+
+        # 5. Extensions: find pre-registered ID by content comparison
+        ext_vec = block.EXT[1]
+        if length(ext_vec) > 0
+            matching_idx = findfirst(registered_ext -> 
+                length(registered_ext) == length(ext_vec) && 
+                all(e1 ≈ e2 for (e1, e2) in zip(registered_ext, ext_vec)),
+                extension_vectors
+            )
+            ext_id = matching_idx === nothing ? 0 : extension_vector_ids[matching_idx]
+        else
+            ext_id = 0
+        end
 
         assets.blocks[idx] = PulseqBlock(idx, duration, rf_id, gx_id, gy_id, gz_id, adc_id, ext_id)
     end
@@ -964,10 +1028,9 @@ end
 
 # A and T are numbers (pulse waveform)
 function register_rf_shapes!(shapes, A, T, Δrf; compress = true)
-    n_samples = max(1, round(Int, T / Δrf)) + 1
-    mag_id    = _store_shape!(shapes, fill(1.0, n_samples); compress=compress)
-    phase_id  = _store_shape!(shapes, fill(mod(angle(A) / (2π), 1.0), n_samples); compress=compress)
-    time_id   = 0
+    mag_id    = _store_shape!(shapes, [1.0, 1.0]; compress=compress)
+    phase_id  = _store_shape!(shapes, [0.0, 0.0]; compress=compress)
+    time_id   = _store_shape!(shapes, [0.0, T] ./ Δrf; compress=compress)
     return mag_id, phase_id, time_id
 end
 # A is a vector (uniformly-sampled waveform)
@@ -994,7 +1057,7 @@ end
 # Arbitrary gradient waveform (into [GRADIENTS] section)
 function register_grad!(assets::PulseqExportAssets, A::Vector, T, rise, fall, delay, first, last, ctx::PulseqExportContext)
     iszero(maximum(abs.(A))) && return 0
-    shape_id, time_id = register_grad_shapes!(assets.shapes, A, T, rise, fall,ctx.gradientRasterTime; compress=true)
+    shape_id, time_id = register_grad_shapes!(assets.shapes, A, T, rise, fall, ctx.gradientRasterTime; compress=true)
     amp   = γ * maximum(abs.(A)) # from T/m to Hz/m (nucleus-dependent)
     delay = round(Int, delay * 1e6) # from s to us
     first = γ * first # from T/m to Hz/m 
@@ -1030,9 +1093,9 @@ function register_grad_shapes!(shapes, A::Vector, T::Vector, rise, fall, Δgr; c
     return shape_id, time_id
 end
 
- """
-        id = register_adc!(assets, N, T, delay, Δf, ϕ, ctx)
- """
+"""
+    id = register_adc!(assets, N, T, delay, Δf, ϕ, ctx)
+"""
 function register_adc!(assets::PulseqExportAssets, N, T, delay, Δf, ϕ, ctx::PulseqExportContext)
     iszero(N) && return 0
     num = N
@@ -1048,9 +1111,37 @@ function register_adc!(assets::PulseqExportAssets, N, T, delay, Δf, ϕ, ctx::Pu
     return _store_event!(assets.adc, aux)
 end
 
-register_ext!(assets::PulseqExportAssets, ext::Vector{Vector{Extension}}, ctx::PulseqExportContext) = 0 #TODO
+"""
+    id = register_ext!(assets, ext, ctx)
+"""
+function register_ext!(assets::PulseqExportAssets, ext::Vector{Extension}, ctx::PulseqExportContext)
+    length(ext) == 0 && return 0
+    instance_ids = Int[]
+    for e in ext
+        ext_id      = _store_event!(assets.extensionTypes, typeof(e))
+        
+        if !haskey(assets.extensionSpecs, ext_id)
+            assets.extensionSpecs[ext_id] = Dict{Int,Extension}()
+        end
+        
+        ref         = _store_event!(assets.extensionSpecs[ext_id], e)
+        instance_id = _store_event!(assets.extensionInstances, (ext_id, ref, 0))
+        push!(instance_ids, instance_id)
+    end
+    
+    for i in 1:(length(instance_ids) - 1)
+        current_id = instance_ids[i]
+        next_id = instance_ids[i + 1]
+        
+        # Get the current tuple and update it with the correct next_id
+        type_id, ref_id, _ = assets.extensionInstances[current_id]
+        assets.extensionInstances[current_id] = (type_id, ref_id, next_id)
+    end
+    
+    return instance_ids[1]
+end
 
-# store_event and store_shape are helper functions to store events and shapes in the dictionary, and return the id of the event or shape.
+# store_event! and store_shape! are helper functions to store events and shapes in the dictionary, and return the id of the event or shape.
 function _store_event!(event_dict::Dict, event)
     for (k, v) in event_dict
         if v == event return k end
@@ -1102,7 +1193,7 @@ function emit_pulseq(io::IO, ctx::PulseqExportContext, assets::PulseqExportAsset
     if !isempty(assets.adc)
         emit_adc_section!(io, assets)
     end
-    if !isempty(assets.extensions)
+    if !isempty(assets.extensionInstances)
         emit_extension_section!(io, assets)
     end
     if !isempty(assets.shapes)
@@ -1124,31 +1215,27 @@ function emit_definitions_section!(io::IO, ctx::PulseqExportContext)
     write(io, "BlockDurationRaster $(ctx.blockDurationRaster)\n")
     write(io, "GradientRasterTime $(ctx.gradientRasterTime)\n")
     write(io, "RadiofrequencyRasterTime $(ctx.rfRasterTime)\n")
-    write(io, "AdcRasterTime $(ctx.adcRasterTime)\n\n")
+    write(io, "AdcRasterTime $(ctx.adcRasterTime)\n")
+    for (key, value) in ctx.seq.DEF
+        write(io, "$key $value\n")
+    end
+    write(io, "\n")
 end
 
 function emit_blocks_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# Format of blocks:\n")
     write(io, "# NUM DUR RF  GX  GY  GZ  ADC  EXT\n")
     write(io, "[BLOCKS]\n")
-    if isempty(assets.blocks)
-        return
-    end
+    isempty(assets.blocks) && return
     block_ids = sort(collect(keys(assets.blocks)))
-    
-    max_lengths = [0, 0, 0, 0, 0, 0, 0, 0]
     for id in block_ids
         block = assets.blocks[id]
         values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
+        max_lengths = zeros(Int, length(values))
         for (i, val) in enumerate(values)
             str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
-    end
-    
-    for id in block_ids
-        block = assets.blocks[id]
-        values = [id, block.duration, block.rf, block.gx, block.gy, block.gz, block.adc, block.ext]
         _format_row(io, values, max_lengths)
     end
 end
@@ -1160,24 +1247,16 @@ function emit_rf_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# Field 'use' is the initial of:\n")
     write(io, "# excitation refocusing inversion saturation preparation other undefined\n")
     write(io, "[RF]\n")
-    if isempty(assets.rf)
-        return
-    end
+    isempty(assets.rf) && return
     rf_ids = sort(collect(keys(assets.rf)))
-    
-    max_lengths = zeros(Int, 12)
     for id in rf_ids
         rf_data = assets.rf[id]
         values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
+        max_lengths = zeros(Int, 12)
         for (i, val) in enumerate(values)
             str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
-    end
-    
-    for id in rf_ids
-        rf_data = assets.rf[id]
-        values = [id, rf_data[1], rf_data[2], rf_data[3], rf_data[4], rf_data[5], rf_data[6], rf_data[7], rf_data[8], rf_data[9], rf_data[10], rf_data[11]]
         _format_row(io, values, max_lengths)
     end
 end
@@ -1187,24 +1266,16 @@ function emit_gradients_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# id      amp      first      last  shape_id  time_id  delay\n")
     write(io, "# ..     Hz/m       Hz/m      Hz/m        ..       ..     us\n")
     write(io, "[GRADIENTS]\n")
-    if isempty(assets.gradients)
-        return
-    end
+    isempty(assets.gradients) && return
     grad_ids = sort(collect(keys(assets.gradients)))
-    
-    max_lengths = zeros(Int, 7)
     for id in grad_ids
         grad_data = assets.gradients[id]
         vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
+        max_lengths = zeros(Int, 7)
         for (i, val) in enumerate(vals)
             str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
-    end
-    
-    for id in grad_ids
-        grad_data = assets.gradients[id]
-        vals = (id, grad_data[1], grad_data[2], grad_data[3], grad_data[4], grad_data[5], grad_data[6])
         _format_row(io, vals, max_lengths)
     end
 end
@@ -1214,25 +1285,16 @@ function emit_trap_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# id      amp      rise  flat  fall  delay\n")
     write(io, "# ..     Hz/m        us    us    us     us\n")
     write(io, "[TRAP]\n")
-    if isempty(assets.trapezoids)
-        return
-    end
+    isempty(assets.trapezoids) && return
     trap_ids = sort(collect(keys(assets.trapezoids)))
-    
-    # Calculate max lengths directly - avoid creating array to preserve Int types
-    max_lengths = zeros(Int, 6)
     for id in trap_ids
         trap_data = assets.trapezoids[id]
         vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
+        max_lengths = zeros(Int, 6)
         for (i, val) in enumerate(vals)
             str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
-    end
-    
-    for id in trap_ids
-        trap_data = assets.trapezoids[id]
-        vals = (id, trap_data[1], trap_data[2], trap_data[3], trap_data[4], trap_data[5])
         _format_row(io, vals, max_lengths)
     end
 end
@@ -1242,29 +1304,54 @@ function emit_adc_section!(io::IO, assets::PulseqExportAssets)
     write(io, "# id  num  dwell  delay  freq_ppm  phase_ppm  freq  phase  phase_id\n")
     write(io, "# ..   ..     ns     us       ppm        ppm    Hz    rad        ..\n")
     write(io, "[ADC]\n")
-    if isempty(assets.adc)
-        return
-    end
+    isempty(assets.adc) && return
     adc_ids = sort(collect(keys(assets.adc)))
-    
-    max_lengths = zeros(Int, 9)
     for id in adc_ids
         adc_data = assets.adc[id]
         vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
+        max_lengths = zeros(Int, 9)
         for (i, val) in enumerate(vals)
             str = _format_value(val)
             max_lengths[i] = max(max_lengths[i], length(str))
         end
-    end
-    
-    for id in adc_ids
-        adc_data = assets.adc[id]
-        vals = (id, adc_data[1], adc_data[2], adc_data[3], adc_data[4], adc_data[5], adc_data[6], adc_data[7], adc_data[8])
         _format_row(io, vals, max_lengths)
     end
 end
 
-emit_extension_section!(io::IO, assets::PulseqExportAssets) = @warn "[EXTENSIONS] emission not implemented yet"
+function emit_extension_section!(io::IO, assets::PulseqExportAssets)
+    write(io, "\n# Format of extension events:\n")
+    write(io, "# id  type  ref  next_id\n")
+    write(io, "# Extension list is followed by extension specifications\n")
+    write(io, "[EXTENSIONS]\n")
+    isempty(assets.extensionInstances) && return
+    ext_ids = sort(collect(keys(assets.extensionInstances)))
+    for id in ext_ids
+        ext_data = assets.extensionInstances[id]
+        vals = (id, ext_data[1], ext_data[2], ext_data[3])
+        max_lengths = length.(digits.(vals))
+        _format_row(io, vals, max_lengths)
+    end
+    write(io, "\n")
+    type_ids = sort(collect(keys(assets.extensionTypes)))
+    for id in type_ids
+        write(io, KomaMRIBase.extension_type_header(assets.extensionTypes[id]))
+        write(io, "extension $(string(KomaMRIBase.get_symbol_from_EXT_type(assets.extensionTypes[id]))) $id\n")
+        spec_ids = sort(collect(keys(assets.extensionSpecs[id])))
+        for spec_id in spec_ids
+            v = assets.extensionSpecs[id][spec_id]
+            field_values = Tuple(getfield(v, f) for f in fieldnames(typeof(v)))
+            scaled_values = [d isa Char ? d : s*d for (s, d) in zip(KomaMRIBase.get_scale(typeof(v)), field_values)]     
+            vals = (spec_id, scaled_values...)
+            max_lengths = zeros(Int, length(vals))
+            for (i, val) in enumerate(vals)
+                str = _format_value(val)
+                max_lengths[i] = max(max_lengths[i], length(str))
+            end
+            _format_row(io, vals, max_lengths)
+        end
+        id !== type_ids[end] && write(io, "\n")
+    end
+end
 
 function emit_shapes_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Sequence shapes\n")
@@ -1274,7 +1361,7 @@ function emit_shapes_section!(io::IO, assets::PulseqExportAssets)
         write(io, "shape_id $id\n")
         write(io, "num_samples $num_samples\n")
         for sample in samples
-            @printf(io, "%.4f\n", sample)
+            @printf(io, "%.8f\n", sample)
         end
         write(io, "\n")
     end
@@ -1290,7 +1377,7 @@ function emit_signature_section!(io::IO, algorithm::AbstractString, hash_value::
 end
 
 # Helper function to format a value as string based on format type
-_format_value(val) = val isa Float64 ? @sprintf("%.4f", val) : string(val)
+_format_value(val) = val isa Float64 && mod(val, 1.0) != 0.0 ? @sprintf("%.8f", val) : string(val)
 
 # Helper function to format a table row with automatic column alignment (right-aligned)
 function _format_row(io, values, max_lengths)

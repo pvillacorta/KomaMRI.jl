@@ -223,7 +223,7 @@ end
 @testitem "Bloch" tags=[:important, :core, :nomotion] begin
     using Suppressor
     include("initialize_backend.jl")
-    include(joinpath(@__DIR__, "test_files", "utils.jl"))
+    include("utils.jl")
 
     sig_jemris = signal_sphere_jemris()
     seq = seq_epi_100x100_TE100_FOV230()
@@ -244,7 +244,7 @@ end
 @testitem "Bloch_RF_accuracy" tags=[:important, :core, :nomotion] begin
     using Suppressor, OrdinaryDiffEqTsit5
     include("initialize_backend.jl")
-    include(joinpath(@__DIR__, "test_files", "utils.jl"))
+    include("utils.jl")
 
     # Seq params
     Tadc = 1e-3
@@ -328,7 +328,7 @@ end
 @testitem "BlochDict" tags=[:important, :core, :nomotion] begin
     using Suppressor
     include("initialize_backend.jl")
-    include(joinpath(@__DIR__, "test_files", "utils.jl"))
+    include("utils.jl")
 
     seq = seq_epi_100x100_TE100_FOV230()
     obj = Phantom(x=[0.], T1=[1000e-3], T2=[100e-3])
@@ -352,7 +352,7 @@ end
 @testitem "BlochSimple" tags=[:important, :core, :nomotion] begin
     using Suppressor
     include("initialize_backend.jl")
-    include(joinpath(@__DIR__, "test_files", "utils.jl"))
+    include("utils.jl")
 
     sig_jemris = signal_sphere_jemris()
     seq = seq_epi_100x100_TE100_FOV230()
@@ -427,7 +427,7 @@ end
 @testitem "Motion" tags=[:core, :motion] begin
     using Suppressor, OrdinaryDiffEqTsit5
     include("initialize_backend.jl")
-    include(joinpath(@__DIR__, "test_files", "utils.jl"))
+    include("utils.jl")
 
     Nadc = 25
     M0 = 1.0
