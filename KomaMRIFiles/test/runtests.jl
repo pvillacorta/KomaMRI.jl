@@ -61,29 +61,29 @@ end
 
 @testitem "Pulseq" tags=[:files, :pulseq] begin
     using MAT, KomaMRIBase, Suppressor
-    @testset "Simple Tests" begin
-        pth = @__DIR__
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.5/gre_rad.seq") #Pulseq v1.5.1
+    @testset "Basic Tests" begin
+        pth = (@__DIR__ )*"/test_files/pulseq/basic_tests/"
+        seq = @suppress read_seq(pth*"v1.5/gre_rad.seq") #Pulseq v1.5.1
         @test seq.DEF["FileName"] == "gre_rad.seq"
         @test seq.DEF["PulseqVersion"] == v"1.5.1"
         @test seq.DEF["signature"][:hash] == "80eae81bb6b808f2cb4ed5d23885009b"
         
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.4/epi.seq") #Pulseq v1.4.0, RF arbitrary
+        seq = @suppress read_seq(pth*"v1.4/epi.seq") #Pulseq v1.4.0, RF arbitrary
         @test seq.DEF["FileName"] == "epi.seq"
         @test seq.DEF["PulseqVersion"] == v"1.4.0"
         @test seq.DEF["signature"][:hash] == "67ebeffe6afdf0c393834101c14f3990"
 
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.4/spiral.seq") #Pulseq v1.4.0, RF arbitrary
+        seq = @suppress read_seq(pth*"v1.4/spiral.seq") #Pulseq v1.4.0, RF arbitrary
         @test seq.DEF["FileName"] == "spiral.seq"
         @test seq.DEF["PulseqVersion"] == v"1.4.0"
         @test seq.DEF["signature"][:hash] == "efc5eb7dbaa82aba627a31ff689c8649"
 
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.2/epi_JEMRIS.seq") #Pulseq v1.2.1
+        seq = @suppress read_seq(pth*"v1.2/epi_JEMRIS.seq") #Pulseq v1.2.1
         @test seq.DEF["FileName"] == "epi_JEMRIS.seq"
         @test seq.DEF["PulseqVersion"] == v"1.2.1"
         @test seq.DEF["signature"][:hash] == "f291a24409c3e8de01ddb93e124d9ff2"
 
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.2/radial_JEMRIS.seq") #Pulseq v1.2.1
+        seq = @suppress read_seq(pth*"v1.2/radial_JEMRIS.seq") #Pulseq v1.2.1
         @test seq.DEF["FileName"] == "radial_JEMRIS.seq"
         @test seq.DEF["PulseqVersion"] == v"1.2.1"
         @test seq.DEF["signature"][:hash] == "e827cfff4436b65a6341a4fa0f6deb07"
@@ -94,9 +94,9 @@ end
         shape2 = KomaMRIFiles.decompress_shape(num_samples, compressed_data)
         @test shape == shape2
     end
-    @testset "Label Tests" begin
+    @testset "Labels" begin
         pth = @__DIR__
-        seq = @suppress read_seq(pth*"/test_files/pulseq/v1.4/label_test.seq") 
+        seq = @suppress read_seq(pth*"/test_files/pulseq/basic_tests/v1.4/label_test.seq") 
         label = get_label(seq)
         m = maximum(label)
         a = AdcLabels(4,0,0,0,0,0,0,2,0,0,0,0)
@@ -140,12 +140,12 @@ end
     end
     @testset "Round-trip Test" begin
         include("utils.jl")
-        pth = @__DIR__
+        pth = (@__DIR__) * "/test_files/pulseq/"
         # EPI sequence
-        filename = pth * "/test_files/pulseq/round_trip_tests/epi_example.seq"
-        seq1 = PulseDesigner.EPI_example()
+        filename = pth * "round_trip_test.seq"
+        seq1 = round_trip_seq()
         qseq = quantize_seq_times(seq1)
-        @suppress write_seq(seq1, filename)
+        @suppress write_seq(qseq, filename)
         seq2 = @suppress read_seq(filename)
         @test seq2 ≈ qseq
     end

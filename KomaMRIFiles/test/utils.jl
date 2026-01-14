@@ -23,5 +23,13 @@ function quantize_seq_times(seq::Sequence)
     return qseq
 end
 
+function round_trip_seq()
+    seq = Sequence()
+    seq += RF(1.0, 100e-6)
+    seq += Grad(1.0, 100e-6, 10e-6)
+    seq += ADC(100, 10e-6, 10e-6)
+    return seq
+end
+
 quantize_time(t::Array, factor::Float64) = t
 quantize_time(t::Real,  factor::Float64) = round(Int, t / factor) * factor
