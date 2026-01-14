@@ -157,7 +157,9 @@ function Base.:(≈)(x::Sequence, y::Sequence)
 			for j in 1:size(ex, 1)
 				amp_field = hasfield(typeof(ex[j]), :A) ? :A : :N
 				non_contributing_event = (getfield(ex[j], amp_field) == getfield(ey[j], amp_field) == 0) && has_active_events(bx) && has_active_events(by)  
-				push!(equal_events, non_contributing_event ? true : ex[j] ≈ ey[j])
+				is_equal = non_contributing_event ? true : ex[j] ≈ ey[j]
+				is_equal || @info "Event $event $j is not equal: $ex[j] ≈ $ey[j]"
+				push!(equal_events, is_equal)
 			end
 		end
 		push!(equal_blocks, all(equal_events) && (bx.DUR ≈ by.DUR) && all(bx.EXT[1] .≈ by.EXT[1]))

@@ -329,8 +329,6 @@ function fix_first_last_grads!(obj::Dict)
                 if grad[6] > 0 # delay > 0
                     grad_prev_last[iG] = 0.0 
                 end
-                
-                println("grad: $(grad)")
                 if grad[5] != 0 # time-shaped case
                     grad[3] = waveform[end]
                 else # uniformly-shaped case
@@ -414,7 +412,7 @@ function read_seq(filename)
                 blockEvents = read_blocks(io, pulseq_version)
             elseif  section == "[RF]"
                 if pulseq_version >= v"1.5.0"
-                    rfLibrary = read_events(io, [1/γ 1 1 1 1 1e-6 1 1 1 1 1]; format="%i "*"%f "^(10)*"%c ") # this is 1.5.x format
+                    rfLibrary = read_events(io, [1/γ 1 1 1 1e-6 1e-6 1 1 1 1 1]; format="%i "*"%f "^(10)*"%c ") # this is 1.5.x format
                 elseif pulseq_version >= v"1.4.0"
                     rfLibrary = read_events(io, [1/γ 1 1 1 1e-6 1 1]) # this is 1.4.x format
                 else
@@ -1066,10 +1064,10 @@ end
 """
     id = register_grad!(assets, A, T, rise, fall, delay, first, last, ctx)
 """
-# Arbitrary gradient waveform (into [GRADIENTS] section)
+# Arbitrary gradient waveform (into [GRADIENTS] section) (rise and fall ARE NOT USED)
 function register_grad!(assets::PulseqExportAssets, A::Vector, T, rise, fall, delay, first, last, ctx::PulseqExportContext)
     iszero(maximum(abs.(A))) && return 0
-    shape_id, time_id = register_grad_shapes!(assets.shapes, A, T, rise, fall, ctx.gradientRasterTime; compress=true)
+    shape_id, time_id = register_grad_shapes!(assets.shapes, A, T, ctx.gradientRasterTime; compress=true)
     amp   = γ * maximum(abs.(A)) # from T/m to Hz/m (nucleus-dependent)
     delay = round(Int, delay * 1e6) # from s to us
     first = γ * first # from T/m to Hz/m 
@@ -1077,7 +1075,7 @@ function register_grad!(assets::PulseqExportAssets, A::Vector, T, rise, fall, de
     aux = (amp, first, last, shape_id, time_id, delay)
     return _store_event!(assets.gradients, aux)
 end
-# Trapezoidal gradient waveform (into [TRAP] section)
+# Trapezoidal gradient waveform (into [TRAP] section) (first and last ARE NOT USED)
 function register_grad!(assets::PulseqExportAssets, A::Real, T, rise, fall, delay, first, last, ctx::PulseqExportContext)
     iszero(A) && return 0
     amp   = γ * A # from T/m to Hz/m (nucleus-dependent)  
@@ -1089,18 +1087,15 @@ function register_grad!(assets::PulseqExportAssets, A::Real, T, rise, fall, dela
     return _store_event!(assets.trapezoids, aux)
 end 
 
-# A is a vector (uniformly-sampled waveform)
-function register_grad_shapes!(shapes, A::Vector, T, rise, fall, Δgr; compress = true)
-    n_samples = length(A)
-    shape_id  = _store_shape!(shapes, [0; A ./ maximum(abs.(A)); 0]; compress=compress)
-    t_vector  = [0; collect(range(rise, T + rise, length=n_samples)); T + rise + fall] ./ Δgr
-    time_id   = _store_shape!(shapes, t_vector; compress=compress)
-    return shape_id, time_id
+# A is a vector and T is a number (uniformly-sampled waveform)
+function register_grad_shapes!(shapes, A::Vector, Δgr; compress = true)
+    shape_id  = _store_shape!(shapes, A ./ maximum(abs.(A)); compress=compress)
+    return shape_id, 0
 end
 # A and T are vectors (time-shaped waveform)
-function register_grad_shapes!(shapes, A::Vector, T::Vector, rise, fall, Δgr; compress = true)
-    shape_id = _store_shape!(shapes, [0; A ./ maximum(abs.(A)); 0]; compress=compress)
-    t_vector = cumsum([0; rise; T; fall]) ./ Δgr
+function register_grad_shapes!(shapes, A::Vector, T::Vector, Δgr; compress = true)
+    shape_id = _store_shape!(shapes, A ./ maximum(abs.(A)); compress=compress)
+    t_vector = cumsum([0;  T]) ./ Δgr
     time_id  = _store_shape!(shapes, t_vector; compress=compress)
     return shape_id, time_id
 end
@@ -1255,7 +1250,7 @@ end
 function emit_rf_section!(io::IO, assets::PulseqExportAssets)
     write(io, "\n# Format of RF events:\n")
     write(io, "# id amp mag_id phase_id time_id center delay freq_ppm phase_ppm freq_off phase_off use\n")
-    write(io, "# ..  Hz     ..       ..       ..    ..    us      ppm   rad/MHz       Hz       rad  ..\n")
+    write(io, "# ..  Hz     ..       ..       ..    us    us      ppm   rad/MHz       Hz       rad  ..\n")
     write(io, "# Field 'use' is the initial of:\n")
     write(io, "# excitation refocusing inversion saturation preparation other undefined\n")
     write(io, "[RF]\n")

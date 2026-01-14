@@ -1,4 +1,4 @@
-function quantize_seq_times(seq::Sequence)
+function quantize_to_pulseq(seq::Sequence)
     blockDurationRaster = KomaMRIFiles.get_blockDurationRaster(seq)
     qseq = deepcopy(seq)
     for bi in 1:length(qseq)

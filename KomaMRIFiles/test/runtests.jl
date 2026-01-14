@@ -143,9 +143,9 @@ end
         pth = (@__DIR__) * "/test_files/pulseq/"
         # EPI sequence
         filename = pth * "round_trip_test.seq"
-        seq1 = round_trip_seq()
-        qseq = quantize_seq_times(seq1)
-        @suppress write_seq(qseq, filename)
+        seq1 = PulseDesigner.EPI_example()
+        qseq = quantize_to_pulseq(seq1)
+        @suppress write_seq(seq1, filename)
         seq2 = @suppress read_seq(filename)
         @test seq2 ≈ qseq
     end
