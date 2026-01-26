@@ -625,7 +625,7 @@ Reads the ADC. It is used internally by [`get_block`](@ref).
 """
 function get_ADC(adcLibrary, i)
     adc = ADC(0, 0)
-    haskey(adcLibrary, i) || return [adc]
+    haskey(adcLibrary, i) || return [adc], 0.0
     #Unpacking
     a = adcLibrary[i]["data"]
     v1_5 = length(a) == 8 # (1)num (2)dwell (3)delay (4)freq_ppm (5)phase_ppm (6)freq (7)phase (8)phase_shape_id
@@ -641,7 +641,7 @@ function get_ADC(adcLibrary, i)
     #Definition
     T = (num-1) * dwell
     adc = ADC(num,T,delay,freq,phase)
-    return [adc]
+    return [adc], delay + T - dwell/2
 end
 
 """
@@ -670,9 +670,9 @@ function get_block(obj, i, pulseq_version)
     Δt_rf = obj["definitions"]["RadiofrequencyRasterTime"]
     R, add_half_Δt_rf = get_RF(obj["rfLibrary"], obj["shapeLibrary"], Δt_rf, irf)
     #ADC definition
-    A = get_ADC(obj["adcLibrary"], iadc)
+    A, adc_dur = get_ADC(obj["adcLibrary"], iadc)
     #DUR
-    max_dur = max(dur(Gx), dur(Gy), dur(Gz), dur(R[1]) + (add_half_Δt_rf) * Δt_rf/2, dur(A[1]))
+    max_dur = max(dur(Gx), dur(Gy), dur(Gz), dur(R[1]) + (add_half_Δt_rf) * Δt_rf/2, adc_dur)
     if pulseq_version >= v"1.4.0" # Explicit block duration (in units of blockDurationRaster)
         duration = idur * obj["definitions"]["BlockDurationRaster"]
         @assert duration ≈ max_dur || duration >= max_dur "Block duration must be greater than or approximately equal to the duration of the block events"
@@ -861,10 +861,10 @@ Base.@kwdef struct PulseqExportContext
     adcRasterTime::Float64 = get_adcRasterTime(seq)
 end
 
-get_blockDurationRaster(seq::Sequence) = get(seq.DEF, "BlockDurationRaster", 1e-5)
-get_gradientRasterTime(seq::Sequence)  = get(seq.DEF, "GradientRasterTime", 1e-5)
-get_rfRasterTime(seq::Sequence)        = get(seq.DEF, "RadiofrequencyRasterTime", 1e-6)
-get_adcRasterTime(seq::Sequence)       = get(seq.DEF, "AdcRasterTime", 1e-7)
+get_blockDurationRaster(seq::Sequence) = get(seq.DEF, "BlockDurationRaster", DEFAULT_DEFINITIONS["BlockDurationRaster"])
+get_gradientRasterTime(seq::Sequence)  = get(seq.DEF, "GradientRasterTime", DEFAULT_DEFINITIONS["GradientRasterTime"])
+get_rfRasterTime(seq::Sequence)        = get(seq.DEF, "RadiofrequencyRasterTime", DEFAULT_DEFINITIONS["RadiofrequencyRasterTime"])
+get_adcRasterTime(seq::Sequence)       = get(seq.DEF, "AdcRasterTime", DEFAULT_DEFINITIONS["AdcRasterTime"])
 
 Base.@kwdef struct PulseqBlock
     id::Int
@@ -1055,16 +1055,15 @@ end
 """
 function register_adc!(assets::PulseqExportAssets, N, T, delay, Δf, ϕ, ctx::PulseqExportContext)
     iszero(N) && return 0
-    num = N
-    dwell_s = num == 1 ? T : T / (num - 1)
+    dwell_s = N == 1 ? T : T / (N - 1)
     dwell = dwell_s * 1e9 # from s to ns
-    delay = round(Int, (delay - dwell_s/2) * 1e6) # from s to us, subtract dwell/2 because read_ADC adds it back
+    del = round(Int, (delay - dwell_s/2) * 1e6) # from s to us, subtract dwell/2 
     freq_ppm = 0.0
     phase_ppm = 0.0
     freq = Δf
     phase = ϕ
     phase_id = 0 # TODO: implement phase shape in Koma
-    aux = (num, dwell, delay, freq_ppm, phase_ppm, freq, phase, phase_id)
+    aux = (N, dwell, del, freq_ppm, phase_ppm, freq, phase, phase_id)
     return _store_event!(assets.adc, aux)
 end
 
