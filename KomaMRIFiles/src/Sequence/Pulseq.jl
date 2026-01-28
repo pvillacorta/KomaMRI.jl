@@ -3,7 +3,6 @@ const DEFAULT_DEFINITIONS = Dict("BlockDurationRaster"      => 1e-5,
                                  "RadiofrequencyRasterTime" => 1e-6, 
                                  "AdcRasterTime"            => 1e-7)
 
-
 """
 read_version Read the [VERSION] section of a sequence file.
    defs=read_version(fid) Read Pulseq version from file
@@ -172,10 +171,14 @@ read_shapes Read the [SHAPES] section of a sequence file.
 """
 function read_shapes(io, forceConvertUncompressed)
     shapeLibrary = Dict()
-    readline(io)
     while true #Reading shapes
-        r, id = @scanf(readline(io), "shape_id %i", Int)
-        r == 1 || break #Break if no "shape_id id" is identified
+        eof(io) && break
+        mark(io) # Mark the position before reading the line
+        line = readline(io)
+        if isempty(line) unmark(io); continue end
+        r, id = @scanf(line, "shape_id %i", Int)
+        if r != 1 reset(io); break end # If the line is not a shape_id, reset the io and break the loop
+        unmark(io) # Unmark the position after reading the line
         _, num_samples = @scanf(readline(io), "num_samples %i", Int)
         shape = Float64[]
         while true #Reading shape data
@@ -449,6 +452,27 @@ function read_seq(filename)
                 read_extensions(io, ext_string, ext_type, ext_id, extensionTypeLibrary, extensionSpecLibrary, def["RequiredExtensions"])
             else
                 @error "Unknown section code: $section"
+            end
+        end
+    end
+    # fix trapezoidal gradients imported from older versions
+    if pulseq_version < v"1.4.0"
+        # scan through the gradient objects and update 't'-s (trapezoids) und 'g'-s (free-shape gradients)
+        for i in keys(gradLibrary)
+            if gradLibrary[i]["type"] == 't'
+                #(1)amplitude (2)rise (2)flat (3)fall (4)delay
+                if gradLibrary[i]["data"][2] == 0 #rise
+                    if abs(gradLibrary[i]["data"][1]) == 0 && gradLibrary[i]["data"][3] > 0
+                        gradLibrary[i]["data"][3] -= def["gradRasterTime"]
+                        gradLibrary[i]["data"][2]  = def["gradRasterTime"]
+                    end
+                end
+                if gradLibrary[i]["data"][4] == 0 #delay
+                    if abs(gradLibrary[i]["data"][1]) == 0 && gradLibrary[i]["data"][3] > 0
+                        gradLibrary[i]["data"][3] -= def["gradRasterTime"]
+                        gradLibrary[i]["data"][4]  = def["gradRasterTime"]
+                    end
+                end
             end
         end
     end
