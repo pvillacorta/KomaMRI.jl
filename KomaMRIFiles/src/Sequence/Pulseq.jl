@@ -298,12 +298,12 @@ Updates the `obj` dictionary with new first and last points for gradients.
 https://github.com/pulseq/pulseq/blob/v1.5.1/matlab/%2Bmr/%40Sequence/read.m#L325-L413
 - We are updating the `gradLibrary` entries with the new first and last points, making them compatible with the v1.5.x format.
 """
-function fix_first_last_grads!(obj::Dict, pulseq_version) 
+function fix_first_last_grads!(obj::Dict, pulseq_version; simplify_shapes=true) 
     # Add first and last Pulseq points
     grad_prev_last = [0.0; 0.0; 0.0]
     for iB in 1:length(obj["blockEvents"])
         eventIDs = obj["blockEvents"][iB];
-        block = get_block(obj, iB, pulseq_version)
+        block = get_block(obj, iB, pulseq_version; simplify_shapes=simplify_shapes)
         processedGradIDs = zeros(1, 3);    
         for iG in 1:3
             g_id = eventIDs[2+iG]
@@ -378,7 +378,7 @@ julia> seq = read_seq(seq_file)
 julia> plot_seq(seq)
 ```
 """
-function read_seq(filename)
+function read_seq(filename; simplify_shapes=true)
     @info "Loading sequence $(basename(filename)) ..."
     pulseq_version = v"0.0.0"
     gradLibrary = Dict()
@@ -493,13 +493,13 @@ function read_seq(filename)
     )
     # Add first and last points for gradients #320 for version <= 1.4.2
     if pulseq_version < v"1.5.0"
-        fix_first_last_grads!(obj, pulseq_version)
+        fix_first_last_grads!(obj, pulseq_version; simplify_shapes=simplify_shapes)
     end
     #Transforming Dictionary to Sequence object
     #This should only work for Pulseq files >=1.4.0
     seq = Sequence()
     for i = 1:length(blockEvents)
-        seq += get_block(obj, i, pulseq_version)
+        seq += get_block(obj, i, pulseq_version; simplify_shapes=simplify_shapes)
     end
     # Final details
     #Temporary hack
@@ -531,7 +531,7 @@ Reads the gradient. It is used internally by [`get_block`](@ref).
 # Returns
 - `grad`: (::Grad) Gradient struct
 """
-function get_Grad(gradLibrary, shapeLibrary, Δt_gr, i)
+function get_Grad(gradLibrary, shapeLibrary, Δt_gr, i; simplify_shapes=true)
     gr = Grad(0.0,0.0)
     haskey(gradLibrary, i) || return gr
     if gradLibrary[i]["type"] === 't' # Trapezoidal gradient waveform
@@ -566,7 +566,7 @@ function get_Grad(gradLibrary, shapeLibrary, Δt_gr, i)
             gT = diff(gt) * Δt_gr
             rise, fall = 0.0, 0.0
         end
-        gA, gT = simplify_waveforms(gA, gT)
+        if simplify_shapes gA, gT = simplify_waveforms(gA, gT) end
         gr = Grad(gA, gT, rise, fall, delay, first_grads, last_grads)
     end
     return gr
@@ -586,7 +586,7 @@ Reads the RF. It is used internally by [`get_block`](@ref).
 # Returns
 - `rf`: (`1x1 ::Matrix{RF}`) RF struct
 """
-function get_RF(rfLibrary, shapeLibrary, Δt_rf, i)
+function get_RF(rfLibrary, shapeLibrary, Δt_rf, i; simplify_shapes=true)
     rf = RF(0.0,0.0)
     haskey(rfLibrary, i) || return [rf;;], false
     #Unpacking
@@ -625,7 +625,7 @@ function get_RF(rfLibrary, shapeLibrary, Δt_rf, i)
         delay += rft[1] * Δt_rf # offset due to the shape starting at a non-zero value
         rfT = diff(rft) * Δt_rf
     end
-    rfAϕ, rfT = simplify_waveforms(rfAϕ, rfT)
+    if simplify_shapes rfAϕ, rfT = simplify_waveforms(rfAϕ, rfT) end
     use = KomaMRIBase.get_RF_use_from_char(Val(use))
     if v1_5 # for version 1.5.x
         rf = RF(rfAϕ,rfT,freq,delay,center,use)
@@ -669,7 +669,7 @@ function get_ADC(adcLibrary, i)
 end
 
 """
-    seq = get_block(obj, i, pulseq_version)
+    seq = get_block(obj, i, pulseq_version; simplify_shapes=true)
 
 Block sequence definition. Used internally by [`read_seq`](@ref).
 
@@ -678,21 +678,24 @@ Block sequence definition. Used internally by [`read_seq`](@ref).
 - `i`: (`::Int64`) index of a block event
 - `pulseq_version`: (`::VersionNumber`) Pulseq version
 
+# Keywords
+- `simplify_shapes`: (`::Bool`) whether to simplify the shapes of the gradients and RFs
+
 # Returns
 - `s`: (`::Sequence`) block Sequence struct
 """
-function get_block(obj, i, pulseq_version)
+function get_block(obj, i, pulseq_version; simplify_shapes=true)
     #Unpacking
     idur, irf, igx, igy, igz, iadc, iext = obj["blockEvents"][i]
     #Gradient definition
     Δt_gr = obj["definitions"]["GradientRasterTime"]
-    Gx = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igx)
-    Gy = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igy)
-    Gz = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igz)
+    Gx = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igx; simplify_shapes=simplify_shapes)
+    Gy = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igy; simplify_shapes=simplify_shapes)
+    Gz = get_Grad(obj["gradLibrary"], obj["shapeLibrary"], Δt_gr, igz; simplify_shapes=simplify_shapes)
     G = reshape([Gx;Gy;Gz],3,1) #[Gx;Gy;Gz;;]
     #RF definition
     Δt_rf = obj["definitions"]["RadiofrequencyRasterTime"]
-    R, add_half_Δt_rf = get_RF(obj["rfLibrary"], obj["shapeLibrary"], Δt_rf, irf)
+    R, add_half_Δt_rf = get_RF(obj["rfLibrary"], obj["shapeLibrary"], Δt_rf, irf; simplify_shapes=simplify_shapes)
     #ADC definition
     A, adc_dur = get_ADC(obj["adcLibrary"], iadc)
     #DUR
@@ -926,7 +929,7 @@ function collect_pulseq_assets(ctx::PulseqExportContext)
     assets = PulseqExportAssets()
     seq = ctx.seq
     
-    # First pass: Collect all unique extension vectors and register them once
+    # First step: Collect all unique extension vectors and register them once
     # This ensures that blocks sharing the same extensions reuse the same instance IDs
     # We use parallel arrays to track extension vectors and their IDs (since vectors can't be dict keys)
     extension_vectors = Vector{Extension}[]
@@ -950,7 +953,7 @@ function collect_pulseq_assets(ctx::PulseqExportContext)
         end
     end
     
-    # Second pass: Process all blocks and use pre-registered extension IDs
+    # Second step: Process all blocks and use pre-registered extension IDs
     for (idx, block) in enumerate(seq)
         # 1. RF: deduplicate waveform in `assets.rf` and store the ID
         rf = block.RF[1]
