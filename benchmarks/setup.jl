@@ -19,7 +19,7 @@ function setup_MRILab_benchmark()
     rf = PulseDesigner.RF_sinc(B1, Trf, sys; TBP=4, a=0.46)
     α_desired = 90 + 0im
     α =  get_flip_angles(rf)[1]
-    rf *= α_desired / α #Linearly adjusts B1 to obtain desired FA
+    rf = (α_desired / α) * rf # Linearly adjusts B1 to obtain desired FA
     # Spiral sequence
     TE = 50e-3  # 50e-3 [s]
     TR = 10     # 10 [s]
