@@ -25,8 +25,8 @@ hero:
 features:
   - icon: 📦
     title: Community Standards
-    details: Import Pulseq sequences and export raw data in ISMRMRD. Integrate directly with reconstruction and benchmarking workflows.
-    link: tutorial/03-ChemicalShiftEPI
+    details: Build, read, and write **Pulseq** sequences and export raw data in **ISMRMRD**. Integrate directly with reconstruction workflows.
+    link: /how-to/3-create-your-own-sequence
 
   - icon: 🚀
     title: Fast, Device Agnostic
