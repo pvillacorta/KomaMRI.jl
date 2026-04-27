@@ -24,8 +24,8 @@ hero:
 
 features:
   - icon: 📦
-    title: Community Standards
-    details: Build, read, and write **Pulseq** sequences and export raw data in **ISMRMRD**. Integrate directly with reconstruction workflows.
+    title: Pulseq and ISMRMRD Community Standards
+    details: Build, read, and write Pulseq sequences and export raw data in ISMRMRD. Integrate directly with reconstruction workflows.
     link: /how-to/3-create-your-own-sequence
 
   - icon: 🚀
