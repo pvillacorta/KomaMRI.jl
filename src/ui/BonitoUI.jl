@@ -53,6 +53,8 @@ function launch_ui(;
     push!(w.listeners, on(params -> w.state[] == "configuration" ? show_configuration!(w) :
         show_parameters!(w, params, "Reconstruction parameters", "recparams"), w.rec_params))
 
+    _attach_sequence_studio!(w)
+
     if show_window
         if browser
             w.server[] = Bonito.Server(w.app, host, port)
@@ -64,3 +66,6 @@ function launch_ui(;
     @info "KomaMRI loaded successfully 🚀" KomaMRI=string(pkgversion(KomaMRI)) KomaMRIBase=string(pkgversion(KomaMRIBase)) KomaMRICore=string(pkgversion(KomaMRICore)) KomaMRIFiles=string(pkgversion(KomaMRIFiles)) KomaMRIPlots=string(pkgversion(KomaMRIPlots))
     return return_window ? w : nothing
 end
+
+# KomaMRSeqStudioExt adds the real method for Koma windows.
+_attach_sequence_studio!(::Any) = nothing
