@@ -3,7 +3,7 @@ module KomaMRSeqStudioExt
 using Bonito
 using Observables
 import KomaMRI: KomaWindow, set_content!, _attach_sequence_studio!
-import MRSeqStudio: Sequence, studio, StudioUI
+import MRSeqStudio: Sequence, studio, studio_panel
 using MRSeqStudio: StudioSequence
 
 const STUDIOS = IdDict{KomaWindow,Observable{StudioSequence}}()
@@ -12,7 +12,7 @@ const PANELS = IdDict{KomaWindow,Any}()
 function _attach_sequence_studio!(w::KomaWindow)
     sequence = Observable(StudioSequence())
     STUDIOS[w] = sequence
-    PANELS[w] = StudioUI(sequence)
+    PANELS[w] = studio_panel(sequence)
     w.handlers["view_sequence_studio"] = function (event; kwargs...)
         show_panel!(w)
         return nothing
